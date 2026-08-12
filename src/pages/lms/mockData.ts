@@ -537,11 +537,39 @@ export interface MockFormResponse {
   answers: Record<string, string>;
 }
 
-export const FORM_TEMPLATES: { id: MockForm["template"]; label: string; description: string }[] = [
-  { id: "blank", label: "Blank Form", description: "Start from scratch" },
-  { id: "incident_report", label: "Incident Report", description: "Date, location, description, witnesses, corrective action" },
-  { id: "daily_checklist", label: "Daily Safety Checklist", description: "Site, crew, PPE check, hazards observed, sign-off" },
+export interface MockFormTemplate {
+  id: string;
+  label: string;
+  description: string;
+  /** Which of the three built-in field layouts this template's forms use. */
+  structure: MockForm["template"];
+  isCustom?: boolean;
+}
+
+export const MOCK_FORM_TEMPLATES: MockFormTemplate[] = [
+  { id: "blank", label: "Blank Form", description: "Start from scratch", structure: "blank" },
+  { id: "incident_report", label: "Incident Report", description: "Date, location, description, witnesses, corrective action", structure: "incident_report" },
+  { id: "daily_checklist", label: "Daily Safety Checklist", description: "Site, crew, PPE check, hazards observed, sign-off", structure: "daily_checklist" },
 ];
+
+// Mutable so admins can add their own reusable starter templates alongside
+// the three built-ins — same shared-store pattern used elsewhere in this file.
+export let formTemplatesStore: MockFormTemplate[] = [...MOCK_FORM_TEMPLATES];
+let nextFormTemplateId = 1;
+export function addFormTemplate(input: { label: string; description: string; structure: MockForm["template"] }): MockFormTemplate {
+  const created: MockFormTemplate = {
+    id: `custom_${nextFormTemplateId++}`,
+    label: input.label,
+    description: input.description,
+    structure: input.structure,
+    isCustom: true,
+  };
+  formTemplatesStore = [...formTemplatesStore, created];
+  return created;
+}
+export function removeFormTemplate(id: string): void {
+  formTemplatesStore = formTemplatesStore.filter((t) => t.id !== id);
+}
 
 export const MOCK_FORMS: MockForm[] = [
   { id: 1, title: "Incident Report", description: "Report a workplace injury, near-miss, or property damage incident.", status: "published", ownerName: "Sarah Chen", template: "incident_report", createdAt: daysAgo(40), updatedAt: daysAgo(2) },
