@@ -89,7 +89,8 @@ export type BlockType =
   | "signature"
   | "callout"
   | "warning"
-  | "safety_tip";
+  | "safety_tip"
+  | "assignment";
 
 // ─── Legacy slide data payloads ───────────────────────────────────────────────
 
@@ -351,6 +352,14 @@ export interface WarningBlockData { title?: string; body: string; variant: "warn
 /** Data payload for a `safety_tip` block. */
 export interface SafetyTipBlockData { tip: string; icon?: string; }
 
+/** Data payload for an `assignment` block. */
+export interface AssignmentBlockData {
+  title: string;
+  instructions: string;
+  submissionType: "text" | "file" | "either";
+  dueOffsetDays?: number;
+}
+
 /** Data payload for a `quiz_question` (legacy alias) block. */
 export interface QuizQuestionBlockData { question: QuizQuestion; }
 
@@ -394,7 +403,8 @@ export type BlockData =
   | CalloutBlockData
   | WarningBlockData
   | SafetyTipBlockData
-  | QuizQuestionBlockData;
+  | QuizQuestionBlockData
+  | AssignmentBlockData;
 
 /**
  * A saved content block as stored in the database.

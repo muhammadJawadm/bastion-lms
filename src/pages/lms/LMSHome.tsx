@@ -12,7 +12,7 @@ const FEATURES = [
   { title: "Team Management", desc: "Bulk-upload employees via CSV. Assign training by job title, crew, or department." },
   { title: "Compliance Tracking", desc: "Real-time dashboards showing completion rates, overdue training, and expiring certifications." },
   { title: "Auto Certificates", desc: "PDF certificates generated instantly on course completion. QR-code verifiable." },
-  { title: "Safety-Focused", desc: "Built by a safety professional. Uses industry language: Toolbox Talks, Competent Person, Hazard Communication." },
+  { title: "Safety-Focused", desc: "Built by a safety professional. Uses industry language: Competent Person, Hazard Communication, JHA." },
   { title: "Multi-Client Portal", desc: "Manage all your client companies from one pane of glass. Perfect for safety consultants." },
 ];
 

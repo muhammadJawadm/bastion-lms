@@ -230,4 +230,48 @@
     background-color: #0047AB !important;
     box-shadow: 0 2px 20px rgba(0,0,0,0.25);
   }
+
+  /* ============================================================
+     LMS APP INTERFACE — Inter typography + dark scrollbar
+     Scoped to the authenticated LMS app shell only (LMSLayout,
+     LMSBuilder). The public marketing site keeps Barlow Condensed.
+     ============================================================ */
+  .lms-interface .font-display,
+  .lms-interface h1,
+  .lms-interface h2,
+  .lms-interface h3,
+  .lms-interface h4,
+  .lms-interface h5,
+  .lms-interface h6 {
+    font-family: 'Inter', system-ui, sans-serif;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+
+  .lms-interface .lms-brand-mark {
+    font-family: 'Barlow Condensed', sans-serif;
+  }
+
+  .lms-interface ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .lms-interface ::-webkit-scrollbar-track {
+    background: #0F1C2E;
+  }
+
+  .lms-interface ::-webkit-scrollbar-thumb {
+    background: #2a3f5c;
+    border-radius: 4px;
+  }
+
+  .lms-interface ::-webkit-scrollbar-thumb:hover {
+    background: #3a5070;
+  }
+
+  .lms-interface {
+    scrollbar-color: #2a3f5c #0F1C2E;
+    scrollbar-width: thin;
+  }
 }

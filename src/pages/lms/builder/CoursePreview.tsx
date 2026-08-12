@@ -2,7 +2,7 @@
    COURSE PREVIEW — Multi-device preview of lesson content
    ============================================================ */
 import { useState } from "react";
-import { Monitor, Tablet, Smartphone, X, Shield, CheckCircle, AlertTriangle, Info, Lightbulb, FileText, Package, CheckSquare, PenLine, ThumbsUp, FileCheck } from "lucide-react";
+import { Monitor, Tablet, Smartphone, X, Shield, CheckCircle, AlertTriangle, Info, Lightbulb, FileText, Package, CheckSquare, PenLine, ThumbsUp, FileCheck, ClipboardList } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { DraftBlock, PreviewDevice, TextBlockData, VideoBlockData, ImageBlockData, PdfBlockData, ResourceBlockData, ChecklistBlockData, AcknowledgmentBlockData, PolicyAckBlockData, CalloutBlockData, WarningBlockData, SafetyTipBlockData, QuizQuestionBlockData, CanvasSlideData, CanvasElement, FillInTheBlankData, DragDropData } from "./types";
@@ -178,6 +178,43 @@ function PreviewBlock({ block, device }: { block: DraftBlock; device: PreviewDev
           )}
         </div>
       );
+
+    case "assignment": {
+      const submissionType = (data.submissionType as string) || "text";
+      const dueOffsetDays = (data.dueOffsetDays as number) ?? 7;
+      return (
+        <div className="border border-sky-200 rounded-xl overflow-hidden">
+          <div className="bg-sky-600 px-4 py-3 flex items-center gap-2">
+            <ClipboardList size={16} className="text-white" />
+            <span className="text-white font-display font-bold text-sm">{(data.title as string) || "Assignment"}</span>
+          </div>
+          <div className="p-4 bg-sky-50 space-y-3">
+            <p className="text-sm font-body text-gray-700 whitespace-pre-wrap">
+              {(data.instructions as string) || "Assignment instructions..."}
+            </p>
+            <div className="flex items-center justify-between text-xs font-body">
+              <span className="text-sky-700 font-display font-bold uppercase tracking-wide">
+                {submissionType === "text" ? "Written response" : submissionType === "file" ? "File upload" : "Written response or file upload"}
+              </span>
+              <span className="text-gray-500">Due {dueOffsetDays} day{dueOffsetDays === 1 ? "" : "s"} after assignment</span>
+            </div>
+            {(submissionType === "text" || submissionType === "either") && (
+              <textarea
+                disabled
+                placeholder="Employee types their written response here"
+                className="w-full border border-sky-300 rounded-lg px-3 py-2 text-sm font-body bg-white resize-none"
+                rows={3}
+              />
+            )}
+            {(submissionType === "file" || submissionType === "either") && (
+              <div className="border-2 border-dashed border-sky-300 rounded-lg p-3 text-center text-xs font-body text-sky-600">
+                Employee attaches a file here
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
 
     case "resource":
       return (

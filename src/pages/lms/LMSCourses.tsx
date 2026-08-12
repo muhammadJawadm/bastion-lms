@@ -23,12 +23,14 @@ import {
   Search, Plus, BookOpen, Award, ChevronRight,
   X, Filter, Upload, Image as ImageIcon,
   GraduationCap, LayoutGrid, List, MoreHorizontal,
-  Globe, Lock, Archive, Pencil, Users, Loader2,
+  Globe, Lock, Archive, ArchiveRestore, Pencil, Users, Loader2, Clock, ArrowRight,
+  Copy, ArrowUpDown,
 } from "lucide-react";
 import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
+import { CourseSectionTabs } from "./components/CourseSectionTabs";
 import { toast } from "sonner";
-import { coursesStore, addCourse, type MockCourse } from "./mockData";
+import { coursesStore, addCourse, patchCourse, type MockCourse } from "./mockData";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -88,6 +90,17 @@ const COVER_GRADIENTS: string[] = [
  */
 function getCoverGradient(id: number): string {
   return COVER_GRADIENTS[id % COVER_GRADIENTS.length];
+}
+
+/** Short relative-time label for course card metadata (e.g. "Updated 3d ago"). */
+function formatRelativeUpdated(date?: Date): string | null {
+  if (!date) return null;
+  const days = Math.round((Date.now() - new Date(date).getTime()) / 86400000);
+  if (days <= 0) return "Updated today";
+  if (days === 1) return "Updated yesterday";
+  if (days < 30) return `Updated ${days}d ago`;
+  const months = Math.round(days / 30);
+  return `Updated ${months}mo ago`;
 }
 
 // ─── Cover Image Upload Zone ────────────────────────────────────────────────
@@ -268,14 +281,17 @@ interface CourseCardCourse {
   coverImageUrl?: string | null;
   lessonCount?: number;
   enrollmentCount?: number;
+  updatedAt?: Date;
 }
 
 interface CourseCardProps {
   course: CourseCardCourse;
   isAdmin: boolean;
+  onDuplicate?: () => void;
+  onToggleArchive?: () => void;
 }
 
-function CourseCard({ course, isAdmin }: CourseCardProps) {
+function CourseCard({ course, isAdmin, onDuplicate, onToggleArchive }: CourseCardProps) {
   const gradient: string = getCoverGradient(course.id);
 
   return (
@@ -325,6 +341,16 @@ function CourseCard({ course, isAdmin }: CourseCardProps) {
                 <DropdownMenuItem asChild>
                   <Link href={`/lms/assignments?courseId=${course.id}`} className="gap-2 text-xs cursor-pointer"><Users size={12} /> Assign</Link>
                 </DropdownMenuItem>
+                {onDuplicate && (
+                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onDuplicate(); }} className="gap-2 text-xs cursor-pointer">
+                    <Copy size={12} /> Duplicate
+                  </DropdownMenuItem>
+                )}
+                {onToggleArchive && (
+                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onToggleArchive(); }} className="gap-2 text-xs cursor-pointer">
+                    {course.status === "archived" ? <><ArchiveRestore size={12} /> Unarchive</> : <><Archive size={12} /> Archive</>}
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -347,6 +373,12 @@ function CourseCard({ course, isAdmin }: CourseCardProps) {
               <span>{course.lessonCount}</span>
             </div>
           )}
+          {course.durationMinutes != null && (
+            <div className="flex items-center gap-1 text-white/40 text-xs">
+              <Clock size={11} />
+              <span>{course.durationMinutes}m</span>
+            </div>
+          )}
           {course.enrollmentCount !== undefined && (
             <div className="flex items-center gap-1 text-white/40 text-xs">
               <Users size={11} />
@@ -364,6 +396,9 @@ function CourseCard({ course, isAdmin }: CourseCardProps) {
             </Badge>
           </div>
         </div>
+        {formatRelativeUpdated(course.updatedAt) && (
+          <div className="text-white/30 text-[10px] mt-1.5">{formatRelativeUpdated(course.updatedAt)}</div>
+        )}
       </div>
     </div>
   );
@@ -389,22 +424,55 @@ export default function LMSCourses() {
   const [search, setSearch] = useState<string>("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<"updated" | "title" | "status">("updated");
   const [showCreate, setShowCreate] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [courses, setCourses] = useState<MockCourse[]>(coursesStore);
+
+  const refreshCourses = () => setCourses([...coursesStore]);
 
   const isAdmin: boolean = role === "platform-admin" || role === "client-admin";
   // Employees/demo viewers only see published courses, same as the real app.
   const visibleCourses = isAdmin ? courses : courses.filter((c) => c.status === "published");
   const isLoading = false;
 
-  const filtered = visibleCourses.filter((c) => {
-    const q = search.toLowerCase();
-    const matchSearch = c.title.toLowerCase().includes(q) || (c.description ?? "").toLowerCase().includes(q);
-    const matchCat = filterCategory === "all" || c.category === filterCategory;
-    const matchStatus = filterStatus === "all" || c.status === filterStatus;
-    return matchSearch && matchCat && matchStatus;
-  });
+  const filtered = visibleCourses
+    .filter((c) => {
+      const q = search.toLowerCase();
+      const matchSearch = c.title.toLowerCase().includes(q) || (c.description ?? "").toLowerCase().includes(q);
+      const matchCat = filterCategory === "all" || c.category === filterCategory;
+      const matchStatus = filterStatus === "all" || c.status === filterStatus;
+      return matchSearch && matchCat && matchStatus;
+    })
+    .sort((a, b) => {
+      if (sortBy === "title") return a.title.localeCompare(b.title);
+      if (sortBy === "status") return a.status.localeCompare(b.status);
+      // "updated" (default) — most recently updated first
+      return (b.updatedAt ? new Date(b.updatedAt).getTime() : 0) - (a.updatedAt ? new Date(a.updatedAt).getTime() : 0);
+    });
+
+  function handleDuplicateCourse(course: MockCourse) {
+    addCourse({
+      title: `${course.title} (Copy)`,
+      description: course.description,
+      status: "draft",
+      category: course.category,
+      durationMinutes: course.durationMinutes,
+      issuesCertificate: course.issuesCertificate,
+      coverImageUrl: course.coverImageUrl,
+      lessonCount: course.lessonCount,
+      enrollmentCount: 0,
+    });
+    refreshCourses();
+    toast.success("Course duplicated as a draft");
+  }
+
+  function handleToggleArchive(course: MockCourse) {
+    const nextStatus = course.status === "archived" ? "draft" : "archived";
+    patchCourse(course.id, { status: nextStatus });
+    refreshCourses();
+    toast.success(nextStatus === "archived" ? "Course archived" : "Course restored to draft");
+  }
 
   return (
     <LMSLayout
@@ -423,12 +491,21 @@ export default function LMSCourses() {
         />
       )}
 
+      <CourseSectionTabs active="courses" />
+
       <div className="space-y-5">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h2 className="font-display font-extrabold text-white text-3xl uppercase">Course Library</h2>
-            <p className="text-white/50 text-sm mt-0.5">{filtered.length} course{filtered.length !== 1 ? "s" : ""}</p>
+            <h2 className="font-display font-extrabold text-white text-3xl uppercase">My Courses</h2>
+            <div className="flex items-center gap-3 mt-0.5">
+              <p className="text-white/50 text-sm">{filtered.length} course{filtered.length !== 1 ? "s" : ""}</p>
+              <Link href="/lms/reports">
+                <span className="flex items-center gap-1 text-[#1E90FF] text-xs font-semibold hover:underline cursor-pointer">
+                  View Full Report <ArrowRight size={11} />
+                </span>
+              </Link>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center bg-white/5 border border-white/10 rounded-lg p-0.5">
@@ -491,6 +568,19 @@ export default function LMSCourses() {
                 </SelectContent>
               </Select>
             )}
+            <div className="flex items-center gap-1.5">
+              <ArrowUpDown size={13} className="text-white/30 flex-shrink-0" />
+              <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+                <SelectTrigger className="bg-white/5 border-white/10 text-white/70 focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="updated">Last Updated</SelectItem>
+                  <SelectItem value="title">Title (A–Z)</SelectItem>
+                  <SelectItem value="status">Status</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
 
@@ -503,7 +593,13 @@ export default function LMSCourses() {
           viewMode === "grid" ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {filtered.map((course) => (
-                <CourseCard key={course.id} course={course} isAdmin={isAdmin} />
+                <CourseCard
+                  key={course.id}
+                  course={course}
+                  isAdmin={isAdmin}
+                  onDuplicate={isAdmin ? () => handleDuplicateCourse(course) : undefined}
+                  onToggleArchive={isAdmin ? () => handleToggleArchive(course) : undefined}
+                />
               ))}
             </div>
           ) : (

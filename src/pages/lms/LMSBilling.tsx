@@ -7,13 +7,32 @@
 import { useState } from "react";
 import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
-import { Check, CreditCard, Loader2, ExternalLink, Shield, Zap, Building2 } from "lucide-react";
+import { Check, CreditCard, Loader2, ExternalLink, Shield, Zap, Building2, Download, Users, Mail, Ban, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MOCK_PLANS, MOCK_SUBSCRIPTION } from "./mockData";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  MOCK_PLANS,
+  subscriptionStore,
+  patchSubscription,
+  MOCK_INVOICES,
+  MOCK_EMPLOYEES,
+  MOCK_COMPANY,
+  MOCK_PAYMENT_METHOD,
+} from "./mockData";
 
 const PLAN_ICONS: Record<string, React.ReactNode> = {
   starter: <Shield className="w-6 h-6" />,
@@ -26,16 +45,42 @@ export default function LMSBilling() {
   const [billingCycle, setBillingCycle] = useState<"monthly" | "annual">("monthly");
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [portalPending, setPortalPending] = useState(false);
+  const [subscriptionData, setSubscriptionData] = useState(subscriptionStore);
+  const [pendingPlanId, setPendingPlanId] = useState<string | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelPending, setCancelPending] = useState(false);
 
   const plans = MOCK_PLANS;
   const loadingPlans = false;
-  const subscriptionData = MOCK_SUBSCRIPTION;
+
+  const currentPlanId = subscriptionData?.plan?.id;
+  const hasSubscription = subscriptionData?.hasSubscription;
+  const targetPlan = plans.find((p) => p.id === pendingPlanId);
+  const currentPlan = plans.find((p) => p.id === currentPlanId);
+  const isUpgrade = targetPlan && currentPlan ? targetPlan.monthlyPrice > currentPlan.monthlyPrice : true;
 
   function handleSubscribe(planId: string) {
+    if (hasSubscription && planId !== currentPlanId) {
+      setPendingPlanId(planId);
+      return;
+    }
+    confirmSubscribe(planId);
+  }
+
+  function confirmSubscribe(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan) return;
     setLoadingPlan(planId);
+    setPendingPlanId(null);
     setTimeout(() => {
+      const updated = patchSubscription({
+        hasSubscription: true,
+        plan: { id: plan.id, name: plan.name },
+        cancelAtPeriodEnd: false,
+      });
+      setSubscriptionData(updated);
       setLoadingPlan(null);
-      toast.info("This is a UI preview — checkout isn't connected yet.");
+      toast.success(`Switched to the ${plan.name} plan`);
     }, 600);
   }
 
@@ -47,8 +92,22 @@ export default function LMSBilling() {
     }, 600);
   }
 
-  const currentPlanId = subscriptionData?.plan?.id;
-  const hasSubscription = subscriptionData?.hasSubscription;
+  function handleConfirmCancel() {
+    setCancelPending(true);
+    setTimeout(() => {
+      const updated = patchSubscription({ cancelAtPeriodEnd: true });
+      setSubscriptionData(updated);
+      setCancelPending(false);
+      setCancelOpen(false);
+      toast.success("Subscription set to cancel at period end");
+    }, 500);
+  }
+
+  function handleResumeSubscription() {
+    const updated = patchSubscription({ cancelAtPeriodEnd: false });
+    setSubscriptionData(updated);
+    toast.success("Subscription resumed");
+  }
 
   return (
     <LMSLayout
@@ -71,33 +130,61 @@ export default function LMSBilling() {
             </p>
           </div>
           {hasSubscription && (
-            <Button
-              onClick={handleManageBilling}
-              disabled={portalPending}
-              variant="outline"
-              className="gap-2 border-white/20 text-white/70 hover:text-white hover:bg-white/10 bg-transparent h-auto py-2"
-            >
-              {portalPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
-              Manage Billing
-              <ExternalLink className="w-3 h-3" />
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={handleManageBilling}
+                disabled={portalPending}
+                variant="outline"
+                className="gap-2 border-white/20 text-white/70 hover:text-white hover:bg-white/10 bg-transparent h-auto py-2"
+              >
+                {portalPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
+                Manage Billing
+                <ExternalLink className="w-3 h-3" />
+              </Button>
+              {!subscriptionData.cancelAtPeriodEnd ? (
+                <Button
+                  onClick={() => setCancelOpen(true)}
+                  variant="outline"
+                  className="gap-2 border-white/20 text-white/70 hover:text-red-300 hover:border-red-300/40 hover:bg-white/10 bg-transparent h-auto py-2"
+                >
+                  <Ban className="w-4 h-4" />
+                  Cancel Subscription
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleResumeSubscription}
+                  variant="outline"
+                  className="gap-2 border-white/20 text-white/70 hover:text-white hover:bg-white/10 bg-transparent h-auto py-2"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  Resume Subscription
+                </Button>
+              )}
+            </div>
           )}
         </div>
 
         {/* Current subscription status */}
         {hasSubscription && subscriptionData?.plan && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-8 flex items-center gap-3">
-            <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <Check className="w-4 h-4 text-green-600" />
+          <div className={cn(
+            "border rounded-xl p-4 mb-8 flex items-center gap-3",
+            subscriptionData.cancelAtPeriodEnd ? "bg-amber-50 border-amber-200" : "bg-green-50 border-green-200"
+          )}>
+            <div className={cn(
+              "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0",
+              subscriptionData.cancelAtPeriodEnd ? "bg-amber-100" : "bg-green-100"
+            )}>
+              {subscriptionData.cancelAtPeriodEnd ? <Ban className="w-4 h-4 text-amber-600" /> : <Check className="w-4 h-4 text-green-600" />}
             </div>
             <div>
-              <p className="font-semibold text-green-800">
-                Active Subscription: {subscriptionData.plan.name} Plan
+              <p className={cn("font-semibold", subscriptionData.cancelAtPeriodEnd ? "text-amber-800" : "text-green-800")}>
+                {subscriptionData.cancelAtPeriodEnd ? "Cancellation scheduled: " : "Active Subscription: "}
+                {subscriptionData.plan.name} Plan
               </p>
               {subscriptionData.currentPeriodEnd && (
-                <p className="text-green-600 text-sm">
+                <p className={cn("text-sm", subscriptionData.cancelAtPeriodEnd ? "text-amber-600" : "text-green-600")}>
                   {subscriptionData.cancelAtPeriodEnd
-                    ? `Cancels on ${new Date(subscriptionData.currentPeriodEnd).toLocaleDateString()}`
+                    ? `Access continues until ${new Date(subscriptionData.currentPeriodEnd).toLocaleDateString()}, then your subscription ends.`
                     : `Renews on ${new Date(subscriptionData.currentPeriodEnd).toLocaleDateString()}`}
                 </p>
               )}
@@ -237,6 +324,112 @@ export default function LMSBilling() {
           </div>
         )}
 
+        {/* Account & Usage / Payment Method */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+          <div className="bg-white rounded-2xl border border-gray-200 p-6">
+            <h3 className="font-display font-extrabold text-[#0F1C2E] text-lg uppercase mb-4">Account & Usage</h3>
+            {(() => {
+              const currentPlan = plans.find((p) => p.id === currentPlanId);
+              const seatsUsed = MOCK_EMPLOYEES.filter((e) => e.isActive).length;
+              const seatsMax = currentPlan?.maxUsers ?? 0;
+              const pct = seatsMax > 0 ? Math.min(100, Math.round((seatsUsed / seatsMax) * 100)) : 0;
+              return (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-1.5 text-gray-600"><Users className="w-4 h-4 text-gray-400" /> Seats used</span>
+                    <span className="font-semibold text-gray-800">
+                      {seatsUsed} {seatsMax > 0 ? `/ ${seatsMax}` : "(unlimited)"}
+                    </span>
+                  </div>
+                  {seatsMax > 0 && (
+                    <div className="w-full bg-gray-100 rounded-full h-2">
+                      <div className="bg-[#0047AB] h-2 rounded-full" style={{ width: `${pct}%` }} />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            <div className="mt-5 pt-5 border-t border-gray-100 space-y-1.5">
+              <div className="text-xs font-bold text-gray-400 uppercase tracking-wide">Billing Contact</div>
+              <div className="text-sm text-gray-800 font-semibold">{MOCK_COMPANY.contactName}</div>
+              <div className="flex items-center gap-1.5 text-sm text-gray-500">
+                <Mail className="w-3.5 h-3.5 text-gray-400" /> {MOCK_COMPANY.contactEmail}
+              </div>
+            </div>
+          </div>
+
+          {/* Payment Method */}
+          <div className="bg-white rounded-2xl border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-display font-extrabold text-[#0F1C2E] text-lg uppercase">Payment Method</h3>
+              <button
+                onClick={() => toast.info("This is a UI preview — updating your card isn't connected yet.")}
+                className="text-xs font-semibold text-[#0047AB] hover:underline"
+              >
+                Update
+              </button>
+            </div>
+            <div className="flex items-center gap-3 p-4 bg-[#F4F6F9] rounded-xl">
+              <div className="w-10 h-7 bg-[#0F1C2E] rounded flex items-center justify-center flex-shrink-0">
+                <CreditCard className="w-4 h-4 text-white" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-gray-800">{MOCK_PAYMENT_METHOD.brand} •••• {MOCK_PAYMENT_METHOD.last4}</div>
+                <div className="text-xs text-gray-400">
+                  Expires {String(MOCK_PAYMENT_METHOD.expMonth).padStart(2, "0")}/{MOCK_PAYMENT_METHOD.expYear}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Invoices */}
+        <div className="mb-8">
+          <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100">
+              <h3 className="font-display font-extrabold text-[#0F1C2E] text-lg uppercase">Invoices</h3>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow className="border-gray-100 bg-gray-50 hover:bg-gray-50">
+                  <TableHead className="px-5 py-2.5 text-xs font-bold text-gray-500 uppercase tracking-wide">Invoice</TableHead>
+                  <TableHead className="px-5 py-2.5 text-xs font-bold text-gray-500 uppercase tracking-wide">Amount</TableHead>
+                  <TableHead className="px-5 py-2.5 text-xs font-bold text-gray-500 uppercase tracking-wide">Status</TableHead>
+                  <TableHead className="px-5 py-2.5" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {MOCK_INVOICES.map((inv) => (
+                  <TableRow key={inv.id} className="border-gray-50">
+                    <TableCell className="px-5 py-2.5">
+                      <div className="text-sm font-mono text-gray-700">{inv.number}</div>
+                      <div className="text-xs text-gray-400">{new Date(inv.issuedAt).toLocaleDateString()}</div>
+                    </TableCell>
+                    <TableCell className="px-5 py-2.5 text-sm text-gray-700">${(inv.amountCents / 100).toFixed(2)}</TableCell>
+                    <TableCell className="px-5 py-2.5">
+                      <Badge className={cn(
+                        "border-transparent text-[10px] font-bold uppercase tracking-wide",
+                        inv.status === "paid" ? "bg-green-100 text-green-700" : inv.status === "open" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
+                      )}>
+                        {inv.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="px-5 py-2.5 text-right">
+                      <button
+                        onClick={() => toast.info("Invoice download coming soon")}
+                        className="text-gray-400 hover:text-[#0047AB] transition-colors"
+                        title="Download invoice"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+
         {/* Test mode notice */}
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
           <p className="font-semibold mb-1">Test Mode Active</p>
@@ -245,6 +438,54 @@ export default function LMSBilling() {
           </p>
         </div>
       </div>
+
+      {/* Cancel subscription confirmation */}
+      <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel your subscription?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You'll keep full access to the {subscriptionData.plan.name} plan until{" "}
+              {subscriptionData.currentPeriodEnd ? new Date(subscriptionData.currentPeriodEnd).toLocaleDateString() : "the end of your current billing period"}.
+              After that, your account will move to read-only access and no further charges will be made. This won't delete any course or employee data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancelPending}>Keep Subscription</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleConfirmCancel(); }}
+              disabled={cancelPending}
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+            >
+              {cancelPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Cancel Subscription"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Plan switch confirmation */}
+      <AlertDialog open={!!pendingPlanId} onOpenChange={(open) => !open && setPendingPlanId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{isUpgrade ? "Upgrade" : "Switch"} to the {targetPlan?.name} plan?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {isUpgrade
+                ? "You'll be charged a prorated amount today for the rest of this billing period, then the full plan price on your next renewal date."
+                : "Your new lower rate takes effect immediately, and we'll credit the unused portion of your current plan toward future invoices."}
+              {" "}Applicable sales tax is calculated and shown on your invoice at checkout — this preview doesn't process a real payment.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Never Mind</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); pendingPlanId && confirmSubscribe(pendingPlanId); }}
+              className="bg-[#0047AB] hover:bg-[#003a8c] focus:ring-[#0047AB]"
+            >
+              Confirm {isUpgrade ? "Upgrade" : "Switch"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </LMSLayout>
   );
 }

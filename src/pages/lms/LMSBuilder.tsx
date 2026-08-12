@@ -19,24 +19,26 @@
  *  10. Text blocks have improved contrast and Bastion branding
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "wouter";
 import { toast } from "sonner";
-// DnD imports retained for future page-reorder feature
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
   useSensor, useSensors, type DragEndEvent,
 } from "@dnd-kit/core";
 import {
   SortableContext, sortableKeyboardCoordinates, arrayMove,
+  horizontalListSortingStrategy, useSortable,
 } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowLeft, BookOpen, ChevronDown, ChevronRight, FileText,
   GripVertical, Layers, Loader2, Plus, Save, Settings,
   Shield, Trash2, Video, AlertTriangle, CheckSquare, Image,
   Paperclip, Globe, Lock, Archive, Eye, LayoutList, X,
   Type, FilePlus, Layout, CheckCircle2, Edit3,
-  Monitor, Smartphone,
+  Monitor, Smartphone, Search, MousePointerClick, ShieldAlert, ListChecks,
+  Undo2, Redo2, Copy,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -108,18 +110,60 @@ function StatusBadge({ status }: { status: string }) {
 // ─── Block type picker ────────────────────────────────────────────────────────
 
 /**
+ * The seven block types the redesign brief calls out as most common —
+ * shown first, unsectioned, before the grouped "More blocks" disclosure.
+ */
+const MOST_USED_TYPES: BlockType[] = ["text", "image", "video", "pdf", "assignment", "checklist", "quiz_question", "signature"];
+
+/**
  * BlockPicker — full-screen overlay panel for adding a new content block.
- * Renders as a fixed overlay that slides up from the bottom of the screen.
+ * Neutral cards throughout; Royal Blue applies only on hover/focus/selection.
+ * Search filters across all block types; "Most Used" surfaces the seven most
+ * common blocks up front, with the remainder grouped under a collapsible
+ * "More blocks" disclosure that auto-expands while searching.
  */
 function BlockPicker({ onAdd, onClose }: { onAdd: (type: BlockType) => void; onClose: () => void }) {
+  const [search, setSearch] = useState("");
+  const [moreOpen, setMoreOpen] = useState(false);
+
   // Groups: canvas_slide and callout removed per Session 15.
-  // Blank page is handled as a special "text" block with empty content.
-  const groups: { label: string; emoji: string; types: BlockType[] }[] = [
-    { label: "Content", emoji: "📝", types: ["text", "video", "image", "pdf", "resource"] },
-    { label: "Interactive", emoji: "✅", types: ["checklist", "acknowledgment", "policy_ack", "signature"] },
-    { label: "Safety Notices", emoji: "⚠️", types: ["warning", "safety_tip"] },
-    { label: "Assessment", emoji: "🎯", types: ["quiz_question", "quiz_fitb", "quiz_dragdrop"] },
+  const groups: { label: string; icon: React.ElementType; types: BlockType[] }[] = [
+    { label: "Content", icon: FileText, types: ["text", "video", "image", "pdf", "assignment", "resource"] },
+    { label: "Interactive", icon: MousePointerClick, types: ["checklist", "acknowledgment", "policy_ack", "signature"] },
+    { label: "Safety", icon: ShieldAlert, types: ["warning", "safety_tip"] },
+    { label: "Assessment", icon: ListChecks, types: ["quiz_question", "quiz_fitb", "quiz_dragdrop"] },
   ];
+
+  const q = search.trim().toLowerCase();
+  const matches = (type: BlockType): boolean => {
+    if (!q) return true;
+    const meta = BLOCK_TYPES.find(b => b.type === type);
+    return !!meta && (meta.label.toLowerCase().includes(q) || meta.description.toLowerCase().includes(q));
+  };
+
+  const mostUsedTypes = MOST_USED_TYPES.filter(matches);
+  const moreGroups = groups
+    .map(g => ({ ...g, types: g.types.filter(t => !MOST_USED_TYPES.includes(t) && matches(t)) }))
+    .filter(g => g.types.length > 0);
+  const showMore = moreOpen || q.length > 0;
+  const noResults = q.length > 0 && mostUsedTypes.length === 0 && moreGroups.length === 0;
+
+  const renderCard = (type: BlockType) => {
+    const meta = BLOCK_TYPES.find(b => b.type === type)!;
+    return (
+      <button
+        key={type}
+        onClick={() => { onAdd(type); onClose(); }}
+        className="flex flex-col items-start gap-1.5 p-3 rounded-lg border border-gray-200 bg-white text-left transition-colors hover:border-[#0047AB] hover:bg-[#0047AB]/5 focus-visible:border-[#0047AB] focus-visible:bg-[#0047AB]/5 focus:outline-none"
+      >
+        <span className="text-gray-500">{meta.icon}</span>
+        <div>
+          <p className="text-xs font-display font-bold text-[#0F1C2E] leading-tight">{meta.label}</p>
+          <p className="text-[10px] font-body text-gray-400 mt-0.5 leading-snug line-clamp-2">{meta.description}</p>
+        </div>
+      </button>
+    );
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(15,28,46,0.7)", backdropFilter: "blur(4px)" }}>
@@ -135,61 +179,88 @@ function BlockPicker({ onAdd, onClose }: { onAdd: (type: BlockType) => void; onC
           </button>
           <div className="w-px h-5 bg-gray-200" />
           <h2 className="font-display font-bold text-[#0F1C2E] text-base">Add Content to Page</h2>
-          <p className="text-xs text-gray-400 font-body ml-1 hidden sm:block">Choose a block type to add to this page</p>
           <button onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-600 transition-colors">
             <X size={18} />
           </button>
         </div>
+
+        {/* Search */}
+        <div className="px-5 py-3 border-b border-gray-100 shrink-0">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              autoFocus
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search block types — image, quiz, signature..."
+              className="w-full pl-8 pr-3 py-2 rounded-lg border border-gray-200 text-sm font-body focus:outline-none focus:border-[#0047AB] focus:ring-1 focus:ring-[#0047AB]/20"
+            />
+          </div>
+        </div>
+
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
           {/* ── Blank / Custom Page ── */}
-          <div>
-            <p className="text-xs font-display font-bold text-gray-400 uppercase tracking-widest mb-2.5 flex items-center gap-1.5">
-              <span>🗒️</span>Start Fresh
-            </p>
+          {!q && (
             <button
               onClick={() => { onAdd("text"); onClose(); }}
-              className="w-full flex items-center gap-3 p-4 rounded-xl border-2 border-dashed border-gray-300 hover:border-[#0047AB] hover:bg-blue-50 text-left transition-all group"
+              className="w-full flex items-center gap-3 p-3.5 rounded-xl border-2 border-dashed border-gray-300 hover:border-[#0047AB] hover:bg-[#0047AB]/5 text-left transition-all group"
             >
-              <div className="w-10 h-10 rounded-lg bg-gray-100 group-hover:bg-[#0047AB]/10 flex items-center justify-center shrink-0 transition-colors">
-                <FilePlus size={20} className="text-gray-400 group-hover:text-[#0047AB]" />
+              <div className="w-9 h-9 rounded-lg bg-gray-100 group-hover:bg-[#0047AB]/10 flex items-center justify-center shrink-0 transition-colors">
+                <FilePlus size={18} className="text-gray-400 group-hover:text-[#0047AB]" />
               </div>
               <div>
                 <p className="text-sm font-display font-bold text-[#0F1C2E] group-hover:text-[#0047AB] transition-colors">Blank Page</p>
-                <p className="text-[11px] font-body text-gray-400 mt-0.5">Start with an empty page — add text, images, video, or quiz content as needed</p>
+                <p className="text-[11px] font-body text-gray-400 mt-0.5">Start empty — add text, images, video, or quiz content as needed</p>
               </div>
             </button>
-          </div>
-          {/* ── Content type groups ── */}
-          {groups.map(group => (
-            <div key={group.label}>
-              <p className="text-xs font-display font-bold text-gray-400 uppercase tracking-widest mb-2.5 flex items-center gap-1.5">
-                <span>{group.emoji}</span>
-                {group.label}
-              </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
-                {group.types.map(type => {
-                  const meta = BLOCK_TYPES.find(b => b.type === type)!;
-                  return (
-                    <button
-                      key={type}
-                      onClick={() => { onAdd(type); onClose(); }}
-                      className={cn(
-                        "flex flex-col items-start gap-2 p-3.5 rounded-xl border-2 text-left transition-all",
-                        "hover:shadow-md hover:-translate-y-0.5 active:translate-y-0",
-                        meta.color
-                      )}
-                    >
-                      <span className="text-lg">{meta.icon}</span>
-                      <div>
-                        <p className="text-xs font-display font-bold leading-tight">{meta.label}</p>
-                        <p className="text-[10px] font-body text-current opacity-70 mt-0.5 leading-snug line-clamp-2">{meta.description}</p>
-                      </div>
-                    </button>
-                  );
-                })}
+          )}
+
+          {/* ── Most Used ── */}
+          {mostUsedTypes.length > 0 && (
+            <div>
+              <p className="text-xs font-display font-bold text-gray-400 uppercase tracking-widest mb-2.5">Most Used</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {mostUsedTypes.map(renderCard)}
               </div>
             </div>
-          ))}
+          )}
+
+          {/* ── More blocks (grouped, collapsible) ── */}
+          {moreGroups.length > 0 && (
+            <div>
+              {!q && (
+                <button
+                  onClick={() => setMoreOpen(o => !o)}
+                  className="flex items-center gap-1.5 text-xs font-display font-bold text-gray-400 uppercase tracking-widest mb-2.5 hover:text-[#0047AB] transition-colors"
+                >
+                  <ChevronRight size={12} className={cn("transition-transform", moreOpen && "rotate-90")} />
+                  More Blocks
+                </button>
+              )}
+              {showMore && (
+                <div className="space-y-5">
+                  {moreGroups.map(group => {
+                    const GroupIcon = group.icon;
+                    return (
+                      <div key={group.label}>
+                        <p className="text-[11px] font-display font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                          <GroupIcon size={12} />
+                          {group.label}
+                        </p>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {group.types.map(renderCard)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {noResults && (
+            <p className="text-sm text-gray-400 text-center py-8">No block types match "{search}".</p>
+          )}
         </div>
       </div>
     </div>
@@ -306,6 +377,7 @@ function PageRow({
     block.type === "image" ? "Image" :
     block.type === "pdf" ? "PDF" :
     block.type === "checklist" ? "Check" :
+    block.type === "assignment" ? "Assign" :
     "Page";
 
   return (
@@ -427,14 +499,15 @@ function LessonSettingsPanel({
 // ─── Course settings panel ────────────────────────────────────────────────────
 
 function CourseSettingsPanel({
-  title, description, passScore, issuesCertificate, duration, status, isDemo,
-  onTitleChange, onDescChange, onPassScoreChange, onIssuesCertChange,
+  title, description, passScore, issuesCertificate, certificateTitle, duration, status, isDemo,
+  onTitleChange, onDescChange, onPassScoreChange, onIssuesCertChange, onCertificateTitleChange,
   onDurationChange, onStatusChange, onIsDemoChange, onSave, isSaving, totalLessons, totalMinutes,
 }: {
-  title: string; description: string; passScore: number; issuesCertificate: boolean;
+  title: string; description: string; passScore: number; issuesCertificate: boolean; certificateTitle: string;
   duration: number; status: "draft" | "published" | "archived"; isDemo: boolean;
   onTitleChange: (v: string) => void; onDescChange: (v: string) => void;
   onPassScoreChange: (v: number) => void; onIssuesCertChange: (v: boolean) => void;
+  onCertificateTitleChange: (v: string) => void;
   onDurationChange: (v: number) => void; onStatusChange: (v: "draft" | "published" | "archived") => void;
   onIsDemoChange: (v: boolean) => void;
   onSave: () => void; isSaving: boolean; totalLessons: number; totalMinutes: number;
@@ -486,6 +559,18 @@ function CourseSettingsPanel({
         </div>
         <Switch checked={issuesCertificate} onCheckedChange={onIssuesCertChange} />
       </div>
+      {issuesCertificate && (
+        <div className="space-y-1.5">
+          <Label className="font-display font-bold text-[#0F1C2E] text-xs uppercase tracking-widest">Certificate Title</Label>
+          <Input
+            value={certificateTitle}
+            onChange={(e) => onCertificateTitleChange(e.target.value)}
+            placeholder="e.g. OSHA 10-Hour Construction Safety"
+            className="font-body text-sm"
+          />
+          <p className="text-gray-400 text-[11px] font-body">What prints on the employee's certificate — can differ from the internal course title.</p>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <p className="font-display font-bold text-[#0F1C2E] text-xs uppercase tracking-widest">Demo Course</p>
@@ -498,6 +583,77 @@ function CourseSettingsPanel({
         {isSaving ? <Loader2 size={12} className="animate-spin mr-1" /> : <Save size={12} className="mr-1" />}
         Save Settings
       </Button>
+    </div>
+  );
+}
+
+// ─── Sortable page tab (center canvas page-navigation bar) ───────────────────
+
+/**
+ * SortablePageTab — one "Page N" tab in the center canvas's page-navigation
+ * bar. Draggable via dnd-kit (mouse via the grip handle, keyboard via Tab +
+ * Space to pick up, then arrow keys to move — dnd-kit's KeyboardSensor).
+ */
+function SortablePageTab({
+  block, index, isActive, onSelect, onDuplicate, onDelete,
+}: {
+  block: DraftBlock;
+  index: number;
+  isActive: boolean;
+  onSelect: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "shrink-0 flex items-center rounded-md border text-xs font-display font-bold transition-colors",
+        isActive
+          ? "bg-[#0047AB] border-[#0047AB] text-white"
+          : "bg-white border-gray-200 text-gray-500 hover:border-[#0047AB] hover:text-[#0047AB]"
+      )}
+    >
+      {/* Drag handle — mouse and keyboard (dnd-kit KeyboardSensor) */}
+      <button
+        {...attributes}
+        {...listeners}
+        title="Drag to reorder"
+        className="pl-2 pr-0.5 py-1.5 cursor-grab active:cursor-grabbing touch-none opacity-60 hover:opacity-100"
+      >
+        <GripVertical size={11} />
+      </button>
+      {/* Page label button */}
+      <button onClick={onSelect} className="px-1.5 py-1.5">
+        Page {index + 1}
+      </button>
+      {/* Duplicate / delete — only visible when this page is active */}
+      {isActive && (
+        <>
+          <button
+            onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
+            title="Duplicate this page"
+            className="p-1 text-white/70 hover:text-white transition-colors"
+          >
+            <Copy size={11} />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            title="Delete this page"
+            className="pr-2 pl-0.5 py-1.5 text-white/70 hover:text-red-300 transition-colors"
+          >
+            <X size={11} />
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -559,11 +715,20 @@ export default function LMSBuilder() {
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [blocksDirty, setBlocksDirty] = useState(false);
 
+  // ── Autosave status ("idle" | "saving" | "saved") ──
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+
+  // ── Undo/redo history for the active lesson's pages ──
+  const [blockHistory, setBlockHistory] = useState<{ stack: DraftBlock[][]; index: number }>({ stack: [], index: -1 });
+  /** Set right before an undo/redo replaces `blocks`, so the history-commit effect skips re-recording it. */
+  const isApplyingHistoryRef = useRef(false);
+
   // ── Course edit state ──
   const [courseTitle, setCourseTitle] = useState("");
   const [courseDesc, setCourseDesc] = useState("");
   const [coursePassScore, setCoursePassScore] = useState(80);
   const [courseIssuesCert, setCourseIssuesCert] = useState(true);
+  const [courseCertTitle, setCourseCertTitle] = useState("");
   const [courseDuration, setCourseDuration] = useState(30);
   const [courseStatus, setCourseStatus] = useState<"draft" | "published" | "archived">("draft");
   const [courseIsDemo, setCourseIsDemo] = useState(false);
@@ -586,6 +751,9 @@ export default function LMSBuilder() {
       }));
       setBlocks(draftBlocks);
       setBlocksDirty(false);
+      // Reset undo/redo history for the newly loaded lesson.
+      isApplyingHistoryRef.current = true;
+      setBlockHistory({ stack: [draftBlocks], index: 0 });
       // Auto-select first page when lesson loads
       if (draftBlocks.length > 0 && !activeBlockId) {
         setActiveBlockId(draftBlocks[0].id);
@@ -593,6 +761,72 @@ export default function LMSBuilder() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLesson?.id]);
+
+  // ── Debounced undo/redo history commit ──
+  // Watches `blocks` and, ~500ms after edits settle, checkpoints a snapshot.
+  // Skipped when the change came from undo/redo itself (isApplyingHistoryRef)
+  // so navigating history doesn't truncate the redo stack.
+  useEffect(() => {
+    if (isApplyingHistoryRef.current) {
+      isApplyingHistoryRef.current = false;
+      return;
+    }
+    if (!activeLesson) return;
+    const t = setTimeout(() => {
+      setBlockHistory(prev => {
+        const trimmed = prev.stack.slice(0, prev.index + 1);
+        const nextStack = [...trimmed, blocks];
+        const capped = nextStack.length > 50 ? nextStack.slice(nextStack.length - 50) : nextStack;
+        return { stack: capped, index: capped.length - 1 };
+      });
+    }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocks]);
+
+  const handleUndo = useCallback(() => {
+    if (blockHistory.index <= 0) return;
+    const newIndex = blockHistory.index - 1;
+    isApplyingHistoryRef.current = true;
+    setBlocks(blockHistory.stack[newIndex]);
+    setBlocksDirty(true);
+    setBlockHistory(prev => ({ ...prev, index: newIndex }));
+  }, [blockHistory]);
+
+  const handleRedo = useCallback(() => {
+    if (blockHistory.index >= blockHistory.stack.length - 1) return;
+    const newIndex = blockHistory.index + 1;
+    isApplyingHistoryRef.current = true;
+    setBlocks(blockHistory.stack[newIndex]);
+    setBlocksDirty(true);
+    setBlockHistory(prev => ({ ...prev, index: newIndex }));
+  }, [blockHistory]);
+
+  // ── Keyboard shortcuts: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redo.
+  // Ignored while focus is in a text field / contenteditable so native and
+  // Tiptap's own in-editor undo (character-level) still work as expected —
+  // this shortcut is for page-level structural changes only.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const isEditable = !!target && (
+        target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable
+      );
+      if (isEditable) return;
+      const isMod = e.ctrlKey || e.metaKey;
+      if (!isMod) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((key === "z" && e.shiftKey) || key === "y") {
+        e.preventDefault();
+        handleRedo();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleUndo, handleRedo]);
 
   // ── DnD sensors ──
   const sensors = useSensors(
@@ -684,6 +918,41 @@ export default function LMSBuilder() {
     }
   }, [blocks, deleteBlock, selectedBlockId, activeBlockId]);
 
+  /** Duplicate a page, inserting the copy immediately after the original. */
+  const duplicateBlock = useCallback(async (blockId: string) => {
+    if (!activeLesson) return;
+    const source = blocks.find(b => b.id === blockId);
+    if (!source) return;
+    try {
+      const result = await createBlock.mutateAsync({
+        lessonId: activeLesson.id,
+        type: source.type,
+        data: source.data,
+        sortOrder: blocks.length,
+      });
+      const newBlock: DraftBlock = {
+        id: String(result.id),
+        dbId: result.id,
+        lessonId: activeLesson.id,
+        type: source.type,
+        data: source.data,
+        sortOrder: blocks.length,
+      };
+      setBlocks(prev => {
+        const idx = prev.findIndex(b => b.id === blockId);
+        const next = [...prev];
+        next.splice(idx + 1, 0, newBlock);
+        return next.map((b, i) => ({ ...b, sortOrder: i }));
+      });
+      setActiveBlockId(newBlock.id);
+      setSelectedBlockId(newBlock.id);
+      setBlocksDirty(true);
+      toast.success("Page duplicated");
+    } catch {
+      toast.error("Failed to duplicate page");
+    }
+  }, [activeLesson, blocks, createBlock]);
+
   /** Add an element to the active canvas_slide block */
   const addCanvasElement = useCallback((elementType: "text" | "image" | "video" | "shape") => {
     if (!activeBlockId) return;
@@ -719,6 +988,7 @@ export default function LMSBuilder() {
       setCourseDesc(course.description ?? "");
       setCoursePassScore(course.passScore ?? 80);
       setCourseIssuesCert(course.issuesCertificate ?? true);
+      setCourseCertTitle(course.certificateTitle ?? course.title);
       setCourseDuration(course.durationMinutes ?? 30);
       setCourseStatus(course.status as "draft" | "published" | "archived");
       setCourseIsDemo((course as { isDemo?: boolean }).isDemo ?? false);
@@ -788,10 +1058,12 @@ export default function LMSBuilder() {
   };
 
   const updateLesson = {
+    // No toast here — this backs both the manual Save button and autosave,
+    // which fires on every settled edit. Feedback is the Saving/Saved
+    // indicator in the lesson header instead of a toast per keystroke pause.
     mutateAsync: async (input: { id: number } & Partial<MockLesson>) => {
       const { id, ...patch } = input;
       patchLesson(id, patch);
-      toast.success("Lesson saved");
       bump();
     },
   };
@@ -832,6 +1104,7 @@ export default function LMSBuilder() {
   const handleSaveLesson = useCallback(async () => {
     if (!activeLesson) return;
     setIsSaving(true);
+    setSaveStatus("saving");
     try {
       await updateLesson.mutateAsync({
         id: activeLesson.id,
@@ -855,10 +1128,24 @@ export default function LMSBuilder() {
       setBlocks(prev => prev.map(b => ({ ...b, isDirty: false })));
       setBlocksDirty(false);
       setActiveLesson((prev) => prev ? { ...prev, isDirty: false } : prev);
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
     } finally {
       setIsSaving(false);
     }
   }, [activeLesson, lessonTitle, lessonRequired, updateLesson, blocks, blocksDirty, updateBlock, reorderBlocksMutation]);
+
+  const isDirty = (activeLesson?.isDirty ?? false) || blocksDirty || blocks.some(b => b.isDirty);
+
+  // ── Autosave ──
+  // Debounced: any dirty state (block edits, title/required change) triggers
+  // a silent save ~1.2s after the last edit. The manual Save button calls
+  // the same handleSaveLesson for an explicit, immediate save.
+  useEffect(() => {
+    if (!activeLesson || !isDirty) return;
+    const t = setTimeout(() => { void handleSaveLesson(); }, 1200);
+    return () => clearTimeout(t);
+  }, [isDirty, activeLesson, handleSaveLesson]);
 
   const handleSaveCourse = useCallback(async () => {
     setIsSaving(true);
@@ -869,6 +1156,7 @@ export default function LMSBuilder() {
         description: courseDesc,
         passScore: coursePassScore,
         issuesCertificate: courseIssuesCert,
+        certificateTitle: courseCertTitle,
         durationMinutes: courseDuration,
         status: courseStatus,
         isDemo: courseIsDemo,
@@ -876,7 +1164,7 @@ export default function LMSBuilder() {
     } finally {
       setIsSaving(false);
     }
-  }, [courseId, courseTitle, courseDesc, coursePassScore, courseIssuesCert, courseDuration, courseStatus, courseIsDemo, updateCourse]);
+  }, [courseId, courseTitle, courseDesc, coursePassScore, courseIssuesCert, courseCertTitle, courseDuration, courseStatus, courseIsDemo, updateCourse]);
 
   const handlePublish = useCallback(async () => {
     setIsSaving(true);
@@ -905,8 +1193,6 @@ export default function LMSBuilder() {
     });
   };
 
-  const isDirty = (activeLesson?.isDirty ?? false) || blocksDirty || blocks.some(b => b.isDirty);
-
   // ── Loading / error states ──
   if (loadingCourse || loadingLessons || loadingModules) {
     return (
@@ -933,7 +1219,7 @@ export default function LMSBuilder() {
 
   // ── Render ──
   return (
-    <div className="h-screen flex flex-col bg-[#F4F6F8] overflow-hidden">
+    <div className="lms-interface h-screen flex flex-col bg-[#F4F6F8] overflow-hidden">
       {/* ── Top bar ── */}
       <header className="h-14 bg-[#0F1C2E] border-b border-white/10 flex items-center px-4 gap-4 shrink-0">
         <button onClick={() => navigate("/lms/courses")} className="flex items-center gap-1.5 text-blue-200 hover:text-white transition-colors text-sm">
@@ -1182,7 +1468,35 @@ export default function LMSBuilder() {
                 <span className="text-xs text-gray-400 font-body shrink-0">
                   {activeBlockId ? `Page ${blocks.findIndex(b => b.id === activeBlockId) + 1} of ${blocks.length}` : `${blocks.length} page${blocks.length !== 1 ? "s" : ""}`}
                 </span>
-                {isDirty && <span className="text-amber-500 text-xs font-body shrink-0">Unsaved</span>}
+                {/* Save status indicator */}
+                <span className="text-xs font-body shrink-0 flex items-center gap-1">
+                  {saveStatus === "saving" ? (
+                    <span className="flex items-center gap-1 text-gray-400"><Loader2 size={11} className="animate-spin" />Saving…</span>
+                  ) : saveStatus === "saved" ? (
+                    <span className="flex items-center gap-1 text-green-600"><CheckCircle2 size={11} />Saved</span>
+                  ) : isDirty ? (
+                    <span className="text-amber-500">Unsaved</span>
+                  ) : null}
+                </span>
+                {/* Undo / redo */}
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <button
+                    title="Undo (Ctrl+Z)"
+                    onClick={handleUndo}
+                    disabled={blockHistory.index <= 0}
+                    className="p-1.5 rounded-md text-gray-400 hover:text-[#0047AB] hover:bg-gray-100 disabled:opacity-30 disabled:hover:text-gray-400 disabled:hover:bg-transparent transition-colors"
+                  >
+                    <Undo2 size={14} />
+                  </button>
+                  <button
+                    title="Redo (Ctrl+Shift+Z)"
+                    onClick={handleRedo}
+                    disabled={blockHistory.index >= blockHistory.stack.length - 1}
+                    className="p-1.5 rounded-md text-gray-400 hover:text-[#0047AB] hover:bg-gray-100 disabled:opacity-30 disabled:hover:text-gray-400 disabled:hover:bg-transparent transition-colors"
+                  >
+                    <Redo2 size={14} />
+                  </button>
+                </div>
                 {/* Device preview toggle */}
                 <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5 shrink-0">
                   <button
@@ -1220,38 +1534,24 @@ export default function LMSBuilder() {
                 </Button>
               </div>
 
-              {/* Page navigation tabs */}
+              {/* Page navigation tabs — drag to reorder (mouse or keyboard) */}
               {blocks.length > 0 && (
                 <div className="bg-gray-50 border-b border-gray-200 px-4 py-1.5 flex items-center gap-1 overflow-x-auto shrink-0">
-                  {blocks.map((block, idx) => (
-                    <div
-                      key={block.id}
-                      className={cn(
-                        "shrink-0 flex items-center gap-0.5 rounded-md border text-xs font-display font-bold transition-colors",
-                        activeBlockId === block.id
-                          ? "bg-[#0047AB] border-[#0047AB] text-white"
-                          : "bg-white border-gray-200 text-gray-500 hover:border-[#0047AB] hover:text-[#0047AB]"
-                      )}
-                    >
-                      {/* Page label button */}
-                      <button
-                        onClick={() => { setActiveBlockId(block.id); setSelectedBlockId(block.id); }}
-                        className="px-3 py-1"
-                      >
-                        Page {idx + 1}
-                      </button>
-                      {/* Delete page button — only visible when this page is active */}
-                      {activeBlockId === block.id && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); removeBlock(block.id); }}
-                          title="Delete this page"
-                          className="pr-2 pl-0.5 py-1 text-white/70 hover:text-red-300 transition-colors"
-                        >
-                          <X size={11} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleBlockDragEnd}>
+                    <SortableContext items={blocks.map(b => b.id)} strategy={horizontalListSortingStrategy}>
+                      {blocks.map((block, idx) => (
+                        <SortablePageTab
+                          key={block.id}
+                          block={block}
+                          index={idx}
+                          isActive={activeBlockId === block.id}
+                          onSelect={() => { setActiveBlockId(block.id); setSelectedBlockId(block.id); }}
+                          onDuplicate={() => duplicateBlock(block.id)}
+                          onDelete={() => { if (window.confirm("Delete this page? This cannot be undone.")) removeBlock(block.id); }}
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
                   <button
                     onClick={() => setShowBlockPicker(true)}
                     className="shrink-0 flex items-center gap-1 px-3 py-1 rounded-md border-2 border-dashed border-gray-300 text-gray-400 hover:border-[#0047AB] hover:text-[#0047AB] text-xs font-body transition-colors"
@@ -1399,8 +1699,15 @@ export default function LMSBuilder() {
                 </div>
                 <Button
                   variant="outline"
+                  className="w-full font-display font-bold text-xs tracking-widest uppercase"
+                  onClick={() => duplicateBlock(activeBlock.id)}
+                >
+                  <Copy size={12} className="mr-1" />Duplicate Page
+                </Button>
+                <Button
+                  variant="outline"
                   className="w-full text-red-500 hover:text-red-700 hover:bg-red-50 border-red-200 font-display font-bold text-xs tracking-widest uppercase"
-                  onClick={() => removeBlock(activeBlock.id)}
+                  onClick={() => { if (window.confirm("Delete this page? This cannot be undone.")) removeBlock(activeBlock.id); }}
                 >
                   <Trash2 size={12} className="mr-1" />Delete Page
                 </Button>
@@ -1426,10 +1733,11 @@ export default function LMSBuilder() {
             {rightPanel === "course" && (
               <CourseSettingsPanel
                 title={courseTitle} description={courseDesc} passScore={coursePassScore}
-                issuesCertificate={courseIssuesCert} duration={courseDuration} status={courseStatus}
+                issuesCertificate={courseIssuesCert} certificateTitle={courseCertTitle} duration={courseDuration} status={courseStatus}
                 isDemo={courseIsDemo}
                 onTitleChange={setCourseTitle} onDescChange={setCourseDesc}
                 onPassScoreChange={setCoursePassScore} onIssuesCertChange={setCourseIssuesCert}
+                onCertificateTitleChange={setCourseCertTitle}
                 onDurationChange={setCourseDuration} onStatusChange={setCourseStatus}
                 onIsDemoChange={setCourseIsDemo}
                 onSave={handleSaveCourse} isSaving={isSaving}

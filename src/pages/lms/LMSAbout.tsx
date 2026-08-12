@@ -57,7 +57,7 @@ const FEATURES = [
   {
     icon: Building2,
     title: "Drag-and-Drop Course Builder",
-    desc: "Build custom safety training in minutes using videos (YouTube, Vimeo, or direct upload), PDFs, text lessons, and quizzes. Create Toolbox Talks and site-specific orientations instantly.",
+    desc: "Build custom safety training in minutes using videos (YouTube, Vimeo, or direct upload), PDFs, text lessons, and quizzes. Create site-specific orientations and safety briefings instantly.",
     accent: "#0047AB",
   },
   {

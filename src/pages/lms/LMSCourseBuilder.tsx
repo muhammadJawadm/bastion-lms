@@ -2,17 +2,6 @@
  * @file LMSCourseBuilder.tsx
  * @description Admin-only Course Builder index page for the Bastion LMS.
  *
- * This page is the entry point for administrators who want to create and manage
- * course content. It is distinct from `LMSCourses.tsx` (the learner-facing library)
- * in that it always shows all courses regardless of status (draft, published, archived)
- * and every card links directly to the Course Builder editor (`/lms/builder/:id`).
- *
- * Features:
- *  - Create new courses via a modal dialog (title, description, optional cover image).
- *  - Browse existing courses in a grid or list view with a live search filter.
- *  - Delete courses directly from the card's action menu (with confirmation).
- *  - Cover images are uploaded to S3 via `trpc.uploads.uploadBase64` before course creation.
- *
  * Sub-components defined in this file:
  *  - `CoverUploadZone`    — Drag-and-drop / click-to-upload image picker.
  *  - `CreateCourseModal`  — Modal form for creating a new course.

@@ -1,57 +1,106 @@
 /**
  * LMS Settings — Bastion LMS (UI Prototype)
- * Company profile shows static mock data. There's no persistence here on
- * purpose — it's honest about what's a real save vs. what's just a screen
- * to review, rather than faking a "Saved!" state that doesn't go anywhere.
+ * Company Profile and Notifications are real, editable forms backed by
+ * mock stores (companyStore / notificationPrefsStore). Branding is
+ * plan-gated and Integrations/Security are disabled — those stay
+ * read-only/tooltip-explained rather than faking editability.
  */
 
 import { useState } from "react";
-import { Shield, Bell, Palette, Link2, Users, Lock, Info } from "lucide-react";
+import { Shield, Bell, Palette, Link2, Lock, Info, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MOCK_COMPANY } from "./mockData";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  companyStore,
+  patchCompany,
+  notificationPrefsStore,
+  patchNotificationPrefs,
+  type MockCompany,
+  type MockNotificationPrefs,
+} from "./mockData";
 
 const TABS = [
-  { id: "company", label: "Company Profile", icon: Shield },
-  { id: "branding", label: "Branding", icon: Palette },
-  { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "integrations", label: "Integrations", icon: Link2 },
-  { id: "users", label: "User Roles", icon: Users },
-  { id: "security", label: "Security", icon: Lock },
+  { id: "company", label: "Company Profile", icon: Shield, disabled: false },
+  { id: "branding", label: "Branding", icon: Palette, disabled: false },
+  { id: "notifications", label: "Notifications", icon: Bell, disabled: false },
+  { id: "integrations", label: "Integrations", icon: Link2, disabled: true },
+  { id: "security", label: "Security", icon: Lock, disabled: true },
 ];
 
-function ComingSoon({ label, icon: Icon }: { label: string; icon: React.ElementType }) {
-  return (
-    <div className="bg-white rounded-xl border border-gray-100 p-6">
-      <h3 className="font-display font-bold text-[#0F1C2E] text-xl uppercase mb-4">{label}</h3>
-      <div className="text-center py-12">
-        <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
-          <Icon className="w-6 h-6 text-gray-400" />
-        </div>
-        <p className="text-gray-400 text-sm font-semibold">This section is coming soon.</p>
-        <p className="text-gray-300 text-xs mt-1">Contact Bastion Risk and Safety Group to enable this feature for your account.</p>
-      </div>
-    </div>
-  );
-}
+const INDUSTRY_OPTIONS = [
+  { value: "construction", label: "Construction" },
+  { value: "electrical", label: "Electrical" },
+  { value: "utilities", label: "Utilities" },
+  { value: "maritime", label: "Maritime" },
+  { value: "manufacturing", label: "Manufacturing" },
+  { value: "other", label: "Other" },
+];
+
+const NOTIFICATION_ITEMS: { key: keyof MockNotificationPrefs; label: string; desc: string }[] = [
+  { key: "trainingDueReminders", label: "Training due reminders", desc: "Send employees reminders 7 days before due date" },
+  { key: "overdueTrainingAlerts", label: "Overdue training alerts", desc: "Alert managers when training becomes overdue" },
+  { key: "courseCompletionNotifications", label: "Course completion notifications", desc: "Notify managers when employees complete training" },
+  { key: "certificateExpirationWarnings", label: "Certificate expiration warnings", desc: "Alert 30 days before certificates expire" },
+  { key: "newCourseAssignments", label: "New course assignments", desc: "Email employees when new training is assigned" },
+  { key: "weeklyComplianceDigest", label: "Weekly compliance digest", desc: "Weekly summary report sent to administrators" },
+];
 
 export default function LMSSettings() {
   const { role, setRole } = useLMS();
   const [activeTab, setActiveTab] = useState("company");
-
-  const company = MOCK_COMPANY;
   const isLoading = false;
 
-  const fields: { label: string; value: string | null | undefined }[] = company ? [
-    { label: "Company Name", value: company.name },
-    { label: "Industry", value: company.industry?.replace(/_/g, " ") },
-    { label: "Primary Contact", value: company.contactName },
-    { label: "Contact Email", value: company.contactEmail },
-    { label: "Phone", value: company.contactPhone },
-    { label: "Location", value: [company.city, company.state].filter(Boolean).join(", ") || null },
-  ] : [];
+  // ── Company Profile form state ──
+  const [company, setCompany] = useState<MockCompany>({ ...companyStore });
+  const [savingCompany, setSavingCompany] = useState(false);
+  const companyDirty = JSON.stringify(company) !== JSON.stringify(companyStore);
+
+  const handleCompanyField = <K extends keyof MockCompany>(key: K, value: MockCompany[K]) => {
+    setCompany((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSaveCompany = async () => {
+    setSavingCompany(true);
+    await new Promise((r) => setTimeout(r, 400));
+    patchCompany(company);
+    setSavingCompany(false);
+    toast.success("Company profile updated");
+  };
+
+  const handleCancelCompany = () => {
+    setCompany({ ...companyStore });
+  };
+
+  // ── Notifications form state ──
+  const [prefs, setPrefs] = useState<MockNotificationPrefs>({ ...notificationPrefsStore });
+  const [savingPrefs, setSavingPrefs] = useState(false);
+  const prefsDirty = JSON.stringify(prefs) !== JSON.stringify(notificationPrefsStore);
+
+  const handleSavePrefs = async () => {
+    setSavingPrefs(true);
+    await new Promise((r) => setTimeout(r, 400));
+    patchNotificationPrefs(prefs);
+    setSavingPrefs(false);
+    toast.success("Notification preferences saved");
+  };
+
+  const handleCancelPrefs = () => {
+    setPrefs({ ...notificationPrefsStore });
+  };
 
   return (
     <LMSLayout
@@ -67,13 +116,16 @@ export default function LMSSettings() {
           <div className="md:w-48 flex-shrink-0 flex md:flex-col gap-1 overflow-x-auto">
             {TABS.map((tab) => {
               const Icon = tab.icon;
-              return (
+              const button = (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+                  disabled={tab.disabled}
+                  onClick={() => !tab.disabled && setActiveTab(tab.id)}
                   className={cn(
                     "flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all text-left flex-shrink-0",
-                    activeTab === tab.id
+                    tab.disabled
+                      ? "text-white/25 cursor-not-allowed"
+                      : activeTab === tab.id
                       ? "bg-[#0047AB] text-white"
                       : "text-white/60 hover:text-white hover:bg-white/10"
                   )}
@@ -82,6 +134,13 @@ export default function LMSSettings() {
                   {tab.label}
                 </button>
               );
+              if (!tab.disabled) return button;
+              return (
+                <Tooltip key={tab.id}>
+                  <TooltipTrigger asChild>{button}</TooltipTrigger>
+                  <TooltipContent side="right">Contact your account manager to enable this feature</TooltipContent>
+                </Tooltip>
+              );
             })}
           </div>
 
@@ -89,7 +148,24 @@ export default function LMSSettings() {
           <div className="flex-1 min-w-0">
             {activeTab === "company" && (
               <div className="bg-white rounded-xl border border-gray-100 p-6 space-y-5">
-                <h3 className="font-display font-bold text-[#0F1C2E] text-xl uppercase">Company Profile</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-display font-bold text-[#0F1C2E] text-xl uppercase">Company Profile</h3>
+                  {companyDirty && (
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={handleCancelCompany} disabled={savingCompany}>
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="bg-[#0047AB] hover:bg-[#003a8c]"
+                        onClick={handleSaveCompany}
+                        disabled={savingCompany}
+                      >
+                        {savingCompany ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save Changes"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
 
                 {isLoading ? (
                   <div className="grid sm:grid-cols-2 gap-4">
@@ -100,28 +176,82 @@ export default function LMSSettings() {
                       </div>
                     ))}
                   </div>
-                ) : company ? (
+                ) : (
                   <>
                     <div className="grid sm:grid-cols-2 gap-4">
-                      {fields.map((f) => (
-                        <div key={f.label}>
-                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">{f.label}</label>
-                          <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-4 py-2.5 text-sm text-gray-700 capitalize">
-                            {f.value || "—"}
-                          </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Company Name</label>
+                        <Input
+                          value={company.name}
+                          onChange={(e) => handleCompanyField("name", e.target.value)}
+                          className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Industry</label>
+                        <Select value={company.industry} onValueChange={(v) => handleCompanyField("industry", v)}>
+                          <SelectTrigger className="w-full bg-white focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {INDUSTRY_OPTIONS.map((o) => (
+                              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Primary Contact</label>
+                        <Input
+                          value={company.contactName}
+                          onChange={(e) => handleCompanyField("contactName", e.target.value)}
+                          className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Contact Email</label>
+                        <Input
+                          type="email"
+                          value={company.contactEmail}
+                          onChange={(e) => handleCompanyField("contactEmail", e.target.value)}
+                          className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Phone</label>
+                        <Input
+                          value={company.contactPhone}
+                          onChange={(e) => handleCompanyField("contactPhone", e.target.value)}
+                          className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Location</label>
+                        <div className="flex gap-2">
+                          <Input
+                            value={company.city}
+                            onChange={(e) => handleCompanyField("city", e.target.value)}
+                            placeholder="City"
+                            className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
+                          />
+                          <Input
+                            value={company.state}
+                            onChange={(e) => handleCompanyField("state", e.target.value)}
+                            placeholder="State"
+                            className="w-20 focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
+                          />
                         </div>
-                      ))}
+                      </div>
                     </div>
                     <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
                       <Info className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
                       <p className="text-blue-700 text-xs leading-relaxed">
-                        Company profile changes are currently handled by your Bastion account manager. Email{" "}
-                        <a href="mailto:info@bastionrsg.com" className="underline font-medium hover:text-blue-900">info@bastionrsg.com</a> to update these details.
+                        Changes here update your company profile across the LMS, including the billing contact shown
+                        under Billing. For account-level changes (plan, company ID), email{" "}
+                        <a href="mailto:info@bastionrsg.com" className="underline font-medium hover:text-blue-900">info@bastionrsg.com</a>.
                       </p>
                     </div>
                   </>
-                ) : (
-                  <p className="text-gray-400 text-sm">No company assigned to your account yet.</p>
                 )}
               </div>
             )}
@@ -164,34 +294,44 @@ export default function LMSSettings() {
 
             {activeTab === "notifications" && (
               <div className="bg-white rounded-xl border border-gray-100 p-6 space-y-5">
-                <h3 className="font-display font-bold text-[#0F1C2E] text-xl uppercase">Notification Settings</h3>
-                <p className="text-gray-400 text-sm -mt-2">Automated notifications are on our roadmap — this shows the categories that will be configurable here.</p>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-display font-bold text-[#0F1C2E] text-xl uppercase">Notification Settings</h3>
+                    <p className="text-gray-400 text-sm mt-1">Choose which automated notifications your team receives.</p>
+                  </div>
+                  {prefsDirty && (
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={handleCancelPrefs} disabled={savingPrefs}>
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="bg-[#0047AB] hover:bg-[#003a8c]"
+                        onClick={handleSavePrefs}
+                        disabled={savingPrefs}
+                      >
+                        {savingPrefs ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save Changes"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
                 <div className="space-y-3">
-                  {[
-                    { label: "Training due reminders", desc: "Send employees reminders 7 days before due date" },
-                    { label: "Overdue training alerts", desc: "Alert managers when training becomes overdue" },
-                    { label: "Course completion notifications", desc: "Notify managers when employees complete training" },
-                    { label: "Certificate expiration warnings", desc: "Alert 30 days before certificates expire" },
-                    { label: "New course assignments", desc: "Email employees when new training is assigned" },
-                    { label: "Weekly compliance digest", desc: "Weekly summary report sent to administrators" },
-                  ].map((n) => (
-                    <div key={n.label} className="flex items-center justify-between p-4 bg-[#F4F6F9] rounded-xl opacity-60">
+                  {NOTIFICATION_ITEMS.map((n) => (
+                    <div key={n.key} className="flex items-center justify-between p-4 bg-[#F4F6F9] rounded-xl">
                       <div>
                         <div className="text-sm font-semibold text-gray-800">{n.label}</div>
                         <div className="text-xs text-gray-400 mt-0.5">{n.desc}</div>
                       </div>
-                      <div className="relative w-11 h-6 rounded-full bg-gray-200 flex-shrink-0 cursor-not-allowed">
-                        <div className="absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow" />
-                      </div>
+                      <Switch
+                        checked={prefs[n.key]}
+                        onCheckedChange={(checked) => setPrefs((prev) => ({ ...prev, [n.key]: checked }))}
+                      />
                     </div>
                   ))}
                 </div>
               </div>
             )}
 
-            {activeTab === "integrations" && <ComingSoon label="Integrations" icon={Link2} />}
-            {activeTab === "users" && <ComingSoon label="User Roles" icon={Users} />}
-            {activeTab === "security" && <ComingSoon label="Security" icon={Lock} />}
           </div>
         </div>
       </div>

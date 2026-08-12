@@ -49,11 +49,13 @@ export interface MockCourse {
   category: string;
   durationMinutes: number;
   issuesCertificate: boolean;
+  certificateTitle?: string;
   coverImageUrl: string | null;
   lessonCount: number;
   enrollmentCount: number;
   passScore?: number;
   isDemo?: boolean;
+  updatedAt?: Date;
 }
 
 export interface MockEmployee {
@@ -64,6 +66,7 @@ export interface MockEmployee {
   jobTitle: string;
   isActive: boolean;
   companyId: number;
+  lmsRole: "client_admin" | "employee";
 }
 
 export interface MockEnrollment {
@@ -114,6 +117,15 @@ export const MOCK_COMPANY: MockCompany = {
   isActive: true,
 };
 
+// Mutable so Settings > Company Profile edits are reflected wherever company
+// info is shown (e.g. Billing's billing contact) — same shared-store pattern
+// used for courses/forms/toolbox talks elsewhere in this file.
+export let companyStore: MockCompany = { ...MOCK_COMPANY };
+export function patchCompany(patch: Partial<MockCompany>): MockCompany {
+  companyStore = { ...companyStore, ...patch };
+  return companyStore;
+}
+
 export const MOCK_COMPANIES: MockCompany[] = [
   MOCK_COMPANY,
   { id: 2, name: "Summit Electrical Group", industry: "electrical", contactName: "Marcus Reyes", contactEmail: "marcus@summitelectrical.com", contactPhone: "(619) 555-0142", city: "Chula Vista", state: "CA", plan: "starter", isActive: true },
@@ -121,25 +133,52 @@ export const MOCK_COMPANIES: MockCompany[] = [
   { id: 4, name: "Blue Anchor Maritime", industry: "maritime", contactName: "Tom Alvarez", contactEmail: "tom@blueanchor.com", contactPhone: "(619) 555-0177", city: "San Diego", state: "CA", plan: "starter", isActive: false },
 ];
 
+export interface MockNotificationPrefs {
+  trainingDueReminders: boolean;
+  overdueTrainingAlerts: boolean;
+  courseCompletionNotifications: boolean;
+  certificateExpirationWarnings: boolean;
+  newCourseAssignments: boolean;
+  weeklyComplianceDigest: boolean;
+}
+
+export const MOCK_NOTIFICATION_PREFS: MockNotificationPrefs = {
+  trainingDueReminders: true,
+  overdueTrainingAlerts: true,
+  courseCompletionNotifications: false,
+  certificateExpirationWarnings: true,
+  newCourseAssignments: true,
+  weeklyComplianceDigest: false,
+};
+
+export let notificationPrefsStore: MockNotificationPrefs = { ...MOCK_NOTIFICATION_PREFS };
+export function patchNotificationPrefs(patch: Partial<MockNotificationPrefs>): MockNotificationPrefs {
+  notificationPrefsStore = { ...notificationPrefsStore, ...patch };
+  return notificationPrefsStore;
+}
+
 // ─── Courses ──────────────────────────────────────────────────────────────
 
+const daysFromNow = (n: number) => new Date(Date.now() + n * 86400000);
+const daysAgo = (n: number) => new Date(Date.now() - n * 86400000);
+
 export const MOCK_COURSES: MockCourse[] = [
-  { id: 1, title: "Fall Protection Fundamentals", description: "Core requirements for working at height, anchor points, and PFAS inspection under 29 CFR 1926.502.", status: "published", category: "construction", durationMinutes: 45, issuesCertificate: true, coverImageUrl: null, lessonCount: 6, enrollmentCount: 24 },
-  { id: 2, title: "Confined Space Entry", description: "Permit-required confined space procedures, atmospheric testing, and rescue planning.", status: "published", category: "construction", durationMinutes: 60, issuesCertificate: true, coverImageUrl: null, lessonCount: 8, enrollmentCount: 15 },
-  { id: 3, title: "Lockout/Tagout (LOTO) Awareness", description: "Energy control procedures for servicing and maintaining equipment safely.", status: "published", category: "manufacturing", durationMinutes: 30, issuesCertificate: true, coverImageUrl: null, lessonCount: 5, enrollmentCount: 18 },
-  { id: 4, title: "Trench & Excavation Safety", description: "Protective systems, soil classification, and daily inspection requirements.", status: "published", category: "construction", durationMinutes: 40, issuesCertificate: true, coverImageUrl: null, lessonCount: 6, enrollmentCount: 12 },
-  { id: 5, title: "Hazard Communication (HazCom/GHS)", description: "Safety data sheets, container labeling, and chemical hazard awareness.", status: "draft", category: "general_industry", durationMinutes: 35, issuesCertificate: false, coverImageUrl: null, lessonCount: 4, enrollmentCount: 0 },
-  { id: 6, title: "Electrical Safety — Arc Flash Awareness", description: "NFPA 70E basics, PPE categories, and boundary requirements around energized equipment.", status: "published", category: "electrical", durationMinutes: 50, issuesCertificate: true, coverImageUrl: null, lessonCount: 7, enrollmentCount: 9 },
+  { id: 1, title: "Fall Protection Fundamentals", description: "Core requirements for working at height, anchor points, and PFAS inspection under 29 CFR 1926.502.", status: "published", category: "construction", durationMinutes: 45, issuesCertificate: true, coverImageUrl: null, lessonCount: 6, enrollmentCount: 24, updatedAt: daysAgo(3) },
+  { id: 2, title: "Confined Space Entry", description: "Permit-required confined space procedures, atmospheric testing, and rescue planning.", status: "published", category: "construction", durationMinutes: 60, issuesCertificate: true, coverImageUrl: null, lessonCount: 8, enrollmentCount: 15, updatedAt: daysAgo(10) },
+  { id: 3, title: "Lockout/Tagout (LOTO) Awareness", description: "Energy control procedures for servicing and maintaining equipment safely.", status: "published", category: "manufacturing", durationMinutes: 30, issuesCertificate: true, coverImageUrl: null, lessonCount: 5, enrollmentCount: 18, updatedAt: daysAgo(21) },
+  { id: 4, title: "Trench & Excavation Safety", description: "Protective systems, soil classification, and daily inspection requirements.", status: "published", category: "construction", durationMinutes: 40, issuesCertificate: true, coverImageUrl: null, lessonCount: 6, enrollmentCount: 12, updatedAt: daysAgo(6) },
+  { id: 5, title: "Hazard Communication (HazCom/GHS)", description: "Safety data sheets, container labeling, and chemical hazard awareness.", status: "draft", category: "general_industry", durationMinutes: 35, issuesCertificate: false, coverImageUrl: null, lessonCount: 4, enrollmentCount: 0, updatedAt: daysAgo(1) },
+  { id: 6, title: "Electrical Safety — Arc Flash Awareness", description: "NFPA 70E basics, PPE categories, and boundary requirements around energized equipment.", status: "published", category: "electrical", durationMinutes: 50, issuesCertificate: true, coverImageUrl: null, lessonCount: 7, enrollmentCount: 9, updatedAt: daysAgo(15) },
 ];
 
 // Mutable store so a course created/edited on the catalogue page is still
 // there when navigating into the course builder (separate route components
-// can't share React state — see toolboxTalksStore for the same pattern).
+// can't share React state — see formsStore for the same pattern).
 export let coursesStore: MockCourse[] = [...MOCK_COURSES];
 let nextCourseId = Math.max(...MOCK_COURSES.map((c) => c.id), 0) + 1;
 
 export function addCourse(course: Omit<MockCourse, "id">): MockCourse {
-  const created: MockCourse = { ...course, id: nextCourseId++ };
+  const created: MockCourse = { ...course, id: nextCourseId++, updatedAt: new Date() };
   coursesStore = [created, ...coursesStore];
   return created;
 }
@@ -147,26 +186,36 @@ export function getCourse(id: number): MockCourse | undefined {
   return coursesStore.find((c) => c.id === id);
 }
 export function patchCourse(id: number, patch: Partial<MockCourse>): void {
-  coursesStore = coursesStore.map((c) => (c.id === id ? { ...c, ...patch } : c));
+  coursesStore = coursesStore.map((c) => (c.id === id ? { ...c, ...patch, updatedAt: new Date() } : c));
 }
+
+// ─── Course Library (ready-made Bastion courses, distinct from the company's
+// own coursesStore) — browsed on the Course Library tab and copied into the
+// company's course list via "Add to Company" (calls addCourse). ─────────────
+
+export const MOCK_COURSE_LIBRARY: MockCourse[] = [
+  { id: 9001, title: "Scaffolding Safety — Erector & User", description: "Scaffold types, load capacities, fall protection, and Competent Person inspection requirements under 29 CFR 1926 Subpart L.", status: "published", category: "construction", durationMinutes: 40, issuesCertificate: true, coverImageUrl: null, lessonCount: 6, enrollmentCount: 0, updatedAt: daysAgo(2) },
+  { id: 9002, title: "Personal Protective Equipment (PPE) Essentials", description: "Head, eye, hand, and foot protection selection, inspection, and the hierarchy of controls.", status: "published", category: "general_industry", durationMinutes: 25, issuesCertificate: true, coverImageUrl: null, lessonCount: 4, enrollmentCount: 0, updatedAt: daysAgo(5) },
+  { id: 9003, title: "Heat Illness Prevention", description: "Water, rest, shade requirements and recognizing heat exhaustion vs. heat stroke.", status: "published", category: "construction", durationMinutes: 20, issuesCertificate: true, coverImageUrl: null, lessonCount: 3, enrollmentCount: 0, updatedAt: daysAgo(8) },
+  { id: 9004, title: "Forklift & Powered Industrial Truck Safety", description: "Pre-operation inspection, load handling, and pedestrian awareness for powered industrial trucks.", status: "published", category: "manufacturing", durationMinutes: 45, issuesCertificate: true, coverImageUrl: null, lessonCount: 7, enrollmentCount: 0, updatedAt: daysAgo(12) },
+  { id: 9005, title: "Respiratory Protection Awareness", description: "Respirator types, fit testing basics, and when respiratory protection is required.", status: "published", category: "general_industry", durationMinutes: 30, issuesCertificate: true, coverImageUrl: null, lessonCount: 5, enrollmentCount: 0, updatedAt: daysAgo(4) },
+  { id: 9006, title: "Maritime Confined Space Entry", description: "Shipyard and vessel confined-space hazards, atmospheric testing, and rescue planning under 29 CFR 1915.", status: "published", category: "maritime", durationMinutes: 50, issuesCertificate: true, coverImageUrl: null, lessonCount: 6, enrollmentCount: 0, updatedAt: daysAgo(18) },
+];
 
 // ─── Employees ────────────────────────────────────────────────────────────
 
 export const MOCK_EMPLOYEES: MockEmployee[] = [
-  { id: 2, name: "James Rodriguez", email: "j.rodriguez@pacificcoastcontractors.com", department: "Framing Crew", jobTitle: "Journeyman Carpenter", isActive: true, companyId: 1 },
-  { id: 3, name: "Amy Nguyen", email: "a.nguyen@pacificcoastcontractors.com", department: "Safety", jobTitle: "Safety Officer", isActive: true, companyId: 1 },
-  { id: 4, name: "Derek Wallace", email: "d.wallace@pacificcoastcontractors.com", department: "Excavation", jobTitle: "Equipment Operator", isActive: true, companyId: 1 },
-  { id: 5, name: "Priya Patel", email: "p.patel@pacificcoastcontractors.com", department: "Electrical", jobTitle: "Electrician", isActive: true, companyId: 1 },
-  { id: 6, name: "Marcus Bell", email: "m.bell@pacificcoastcontractors.com", department: "Framing Crew", jobTitle: "Foreman", isActive: true, companyId: 1 },
-  { id: 7, name: "Lisa Tran", email: "l.tran@pacificcoastcontractors.com", department: "Site Ops", jobTitle: "Project Coordinator", isActive: true, companyId: 1 },
-  { id: 8, name: "Carlos Mendez", email: "c.mendez@pacificcoastcontractors.com", department: "Excavation", jobTitle: "Laborer", isActive: false, companyId: 1 },
-  { id: 9, name: "Emily Osei", email: "e.osei@pacificcoastcontractors.com", department: "Electrical", jobTitle: "Apprentice Electrician", isActive: true, companyId: 1 },
+  { id: 2, name: "James Rodriguez", email: "j.rodriguez@pacificcoastcontractors.com", department: "Framing Crew", jobTitle: "Journeyman Carpenter", isActive: true, companyId: 1, lmsRole: "employee" },
+  { id: 3, name: "Amy Nguyen", email: "a.nguyen@pacificcoastcontractors.com", department: "Safety", jobTitle: "Safety Officer", isActive: true, companyId: 1, lmsRole: "client_admin" },
+  { id: 4, name: "Derek Wallace", email: "d.wallace@pacificcoastcontractors.com", department: "Excavation", jobTitle: "Equipment Operator", isActive: true, companyId: 1, lmsRole: "employee" },
+  { id: 5, name: "Priya Patel", email: "p.patel@pacificcoastcontractors.com", department: "Electrical", jobTitle: "Electrician", isActive: true, companyId: 1, lmsRole: "employee" },
+  { id: 6, name: "Marcus Bell", email: "m.bell@pacificcoastcontractors.com", department: "Framing Crew", jobTitle: "Foreman", isActive: true, companyId: 1, lmsRole: "employee" },
+  { id: 7, name: "Lisa Tran", email: "l.tran@pacificcoastcontractors.com", department: "Site Ops", jobTitle: "Project Coordinator", isActive: true, companyId: 1, lmsRole: "employee" },
+  { id: 8, name: "Carlos Mendez", email: "c.mendez@pacificcoastcontractors.com", department: "Excavation", jobTitle: "Laborer", isActive: false, companyId: 1, lmsRole: "employee" },
+  { id: 9, name: "Emily Osei", email: "e.osei@pacificcoastcontractors.com", department: "Electrical", jobTitle: "Apprentice Electrician", isActive: true, companyId: 1, lmsRole: "employee" },
 ];
 
 // ─── Enrollments (drives dashboards, assignments, reports, analytics) ──────
-
-const daysFromNow = (n: number) => new Date(Date.now() + n * 86400000);
-const daysAgo = (n: number) => new Date(Date.now() - n * 86400000);
 
 export const MOCK_ENROLLMENTS: MockEnrollment[] = [
   { id: 1, userId: 2, courseId: 1, companyId: 1, status: "completed", progressPct: 100, dueDate: daysAgo(20), completedAt: daysAgo(18), createdAt: daysAgo(35) },
@@ -190,6 +239,24 @@ export const MOCK_MY_ENROLLMENTS: MockEnrollment[] = [
   { id: 102, userId: MOCK_USER.id, courseId: 2, companyId: 1, status: "in_progress", progressPct: 55, dueDate: daysFromNow(6), completedAt: null, createdAt: daysAgo(12) },
   { id: 103, userId: MOCK_USER.id, courseId: 6, companyId: 1, status: "assigned", progressPct: 0, dueDate: daysFromNow(18), completedAt: null, createdAt: daysAgo(2) },
 ];
+
+// Mutable store so training assigned on the Assignments page is immediately
+// visible from the Employees page (assigned/completion/last-activity columns
+// and the employee detail drawer) — same shared-store pattern as courses.
+export let enrollmentsStore: MockEnrollment[] = [...MOCK_ENROLLMENTS];
+let nextEnrollmentId = Math.max(...MOCK_ENROLLMENTS.map((e) => e.id), 0) + 1;
+
+export function addEnrollment(input: Omit<MockEnrollment, "id" | "createdAt">): MockEnrollment {
+  const created: MockEnrollment = { ...input, id: nextEnrollmentId++, createdAt: new Date() };
+  enrollmentsStore = [created, ...enrollmentsStore];
+  return created;
+}
+export function getEnrollmentsByUser(userId: number): MockEnrollment[] {
+  return enrollmentsStore.filter((e) => e.userId === userId);
+}
+export function patchEnrollment(id: number, patch: Partial<MockEnrollment>): void {
+  enrollmentsStore = enrollmentsStore.map((e) => (e.id === id ? { ...e, ...patch } : e));
+}
 
 // ─── Certificates ───────────────────────────────────────────────────────────
 
@@ -225,16 +292,60 @@ export const MOCK_COMPANY_STATS = {
 
 export const MOCK_PLANS = [
   { id: "starter", name: "Starter", monthlyPrice: 9900, annualPrice: 7900, maxUsers: 25, features: ["Up to 25 employees", "Core course library", "Certificate generation", "Email support"] },
-  { id: "professional", name: "Professional", monthlyPrice: 24900, annualPrice: 19900, maxUsers: 150, features: ["Up to 150 employees", "Custom course builder", "Toolbox Talks library", "Advanced reporting", "Priority support"] },
+  { id: "professional", name: "Professional", monthlyPrice: 24900, annualPrice: 19900, maxUsers: 150, features: ["Up to 150 employees", "Custom course builder", "Custom forms builder", "Advanced reporting", "Priority support"] },
   { id: "enterprise", name: "Enterprise", monthlyPrice: 59900, annualPrice: 49900, maxUsers: 0, features: ["Unlimited employees", "White-label branding", "Dedicated account manager", "API access (coming soon)", "SLA-backed support"] },
 ] as const;
 
-export const MOCK_SUBSCRIPTION = {
+export interface MockSubscription {
+  hasSubscription: boolean;
+  plan: { id: string; name: string };
+  currentPeriodEnd: Date;
+  cancelAtPeriodEnd: boolean;
+}
+
+export const MOCK_SUBSCRIPTION: MockSubscription = {
   hasSubscription: true,
   plan: { id: "professional", name: "Professional" },
   currentPeriodEnd: daysFromNow(22),
   cancelAtPeriodEnd: false,
 };
+
+// Mutable so Billing's plan-switch and Cancel Subscription actions can
+// actually change what's displayed, same shared-store pattern used elsewhere.
+export let subscriptionStore: MockSubscription = { ...MOCK_SUBSCRIPTION };
+export function patchSubscription(patch: Partial<MockSubscription>): MockSubscription {
+  subscriptionStore = { ...subscriptionStore, ...patch };
+  return subscriptionStore;
+}
+
+export interface MockPaymentMethod {
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+}
+
+export const MOCK_PAYMENT_METHOD: MockPaymentMethod = {
+  brand: "Visa",
+  last4: "4242",
+  expMonth: 11,
+  expYear: 2027,
+};
+
+export interface MockInvoice {
+  id: number;
+  number: string;
+  issuedAt: Date;
+  amountCents: number;
+  status: "paid" | "open" | "failed";
+}
+
+export const MOCK_INVOICES: MockInvoice[] = [
+  { id: 1, number: "INV-2026-0007", issuedAt: daysAgo(8), amountCents: 24900, status: "paid" },
+  { id: 2, number: "INV-2026-0006", issuedAt: daysAgo(38), amountCents: 24900, status: "paid" },
+  { id: 3, number: "INV-2026-0005", issuedAt: daysAgo(68), amountCents: 24900, status: "paid" },
+  { id: 4, number: "INV-2026-0004", issuedAt: daysAgo(98), amountCents: 19900, status: "paid" },
+];
 
 // ─── Course Builder: modules, lessons, blocks ──────────────────────────────
 
@@ -327,7 +438,7 @@ export const MOCK_BLOCKS: MockBlock[] = [
   }, sortOrder: 0 },
 ];
 
-// Mutable stores (see toolboxTalksStore above for why: separate route
+// Mutable stores (see coursesStore above for why: separate route
 // components can't share React state, but ES module live bindings mean every
 // importer always sees the current value of a re-assigned `let` export).
 export let modulesStore: MockModule[] = [...MOCK_MODULES];
@@ -404,97 +515,82 @@ export function reorderBlocks(lessonId: number, orderedIds: number[]): void {
   });
 }
 
-// ─── Toolbox Talks ──────────────────────────────────────────────────────────
+// ─── Forms ──────────────────────────────────────────────────────────────────
 
-export interface MockToolboxTalk {
+export interface MockForm {
   id: number;
   title: string;
-  topic: string;
-  industry: string;
-  source: "library" | "custom";
-  content: string;
-  keyPoints: string[];
-  estimatedMinutes: number;
-  regulatoryRef: string | null;
-  requiresSignoff: boolean;
-  companyId: number | null;
+  description: string;
+  status: "draft" | "published";
+  ownerName: string;
+  template: "blank" | "incident_report" | "daily_checklist";
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-export interface MockToolboxSignoff {
-  name: string;
-  signature: string;
-  jobTitle: string;
-}
-
-export interface MockToolboxSession {
+export interface MockFormResponse {
   id: number;
-  talkId: number;
-  location: string | null;
-  conductedBy: string | null;
-  notes: string | null;
-  status: "in_progress" | "completed";
-  startedAt: Date;
-  completedAt: Date | null;
-  signoffs: MockToolboxSignoff[];
+  formId: number;
+  respondentName: string;
+  submittedAt: Date;
+  /** Loosely typed — shape depends on the form's template. */
+  answers: Record<string, string>;
 }
 
-export const MOCK_TOOLBOX_TALKS: MockToolboxTalk[] = [
-  { id: 1, title: "Fall Protection", topic: "fall_protection", industry: "construction", source: "library", content: "<h2>Fall Protection — Pre-Work Safety Briefing</h2><p>Falls are the leading cause of fatalities in construction. OSHA requires fall protection at 6 feet or more. Review anchor points, harness inspection, and guardrail requirements with your crew before work begins.</p>", keyPoints: ["Fall protection required at 6 ft in construction", "Inspect harness before every use", "Anchor points rated for 5,000 lbs minimum", "Never tie off to rebar or unrated points"], estimatedMinutes: 10, regulatoryRef: "29 CFR 1926.502", requiresSignoff: true, companyId: null },
-  { id: 2, title: "Scaffolding Safety", topic: "scaffolding", industry: "construction", source: "library", content: "<h2>Scaffolding Safety — Pre-Work Briefing</h2><p>Scaffolds must be inspected by a Competent Person before each shift. Never use a red-tagged scaffold. Guardrails are required at 10 feet or more above a lower level.</p>", keyPoints: ["Scaffold inspected by Competent Person each shift", "Never use a red-tagged scaffold", "Guardrails required at 10 ft or more", "Do not exceed rated load capacity"], estimatedMinutes: 10, regulatoryRef: "29 CFR 1926.451", requiresSignoff: true, companyId: null },
-  { id: 3, title: "Lockout/Tagout (LOTO)", topic: "lockout_tagout", industry: "general_industry", source: "library", content: "<h2>Lockout/Tagout — Pre-Work Briefing</h2><p>LOTO protects workers from unexpected energization during servicing. Each worker applies their own personal lock. Tags alone are never a substitute for a physical lock.</p>", keyPoints: ["Each worker applies their own personal lock", "Tags alone are not lockout", "Verify zero energy state before starting work", "Identify all energy sources first"], estimatedMinutes: 10, regulatoryRef: "29 CFR 1910.147", requiresSignoff: true, companyId: null },
-  { id: 4, title: "Confined Space Entry", topic: "confined_space", industry: "general_industry", source: "library", content: "<h2>Confined Space Entry — Pre-Work Briefing</h2><p>Never enter a permit-required confined space without a valid entry permit. Test atmosphere in order: oxygen, flammability, toxicity. An attendant must remain outside at all times.</p>", keyPoints: ["Valid entry permit required before entry", "Test O2, then LEL, then toxic gases", "Attendant remains outside at all times", "Establish rescue procedures before entry"], estimatedMinutes: 12, regulatoryRef: "29 CFR 1910.146", requiresSignoff: true, companyId: null },
-  { id: 5, title: "Electrical Safety", topic: "electrical", industry: "electrical", source: "library", content: "<h2>Electrical Safety — Pre-Work Briefing</h2><p>Treat all electrical equipment as energized until proven otherwise. Maintain 10-foot minimum clearance from overhead power lines. Inspect cords and tools before each use.</p>", keyPoints: ["Treat equipment as energized until proven otherwise", "10-ft minimum clearance from power lines", "GFCI protection required for 120V tools", "Never remove the grounding prong"], estimatedMinutes: 10, regulatoryRef: "29 CFR 1926.403", requiresSignoff: true, companyId: null },
-  { id: 6, title: "Personal Protective Equipment (PPE)", topic: "ppe", industry: "all", source: "library", content: "<h2>PPE — Pre-Work Briefing</h2><p>PPE is your last line of defense. Inspect all PPE before each use and replace anything damaged. Hard hat, safety glasses, and steel-toed boots are required on all construction sites.</p>", keyPoints: ["PPE is the last line of defense", "Inspect PPE before every use", "Hard hat, glasses, boots required on-site", "Never modify PPE"], estimatedMinutes: 8, regulatoryRef: "29 CFR 1926.95", requiresSignoff: true, companyId: null },
-  { id: 7, title: "Heat Illness Prevention", topic: "heat_illness", industry: "all", source: "library", content: "<h2>Heat Illness Prevention — Pre-Work Briefing</h2><p>Drink water every 20 minutes, even if not thirsty. Shade must be available when temperature exceeds 80°F. Know the signs of heat stroke and call 911 immediately if suspected.</p>", keyPoints: ["Drink 8oz of water every 20 minutes", "Shade required above 80°F", "Know the signs of heat stroke", "Buddy system — watch each other"], estimatedMinutes: 8, regulatoryRef: "Cal/OSHA Title 8 §3395", requiresSignoff: true, companyId: null },
-  { id: 8, title: "Hazard Communication (HazCom)", topic: "hazcom", industry: "general_industry", source: "library", content: "<h2>Hazard Communication — Pre-Work Briefing</h2><p>All chemical containers must be labeled. SDS sheets must be accessible to every worker. Read the SDS before using any new chemical on site.</p>", keyPoints: ["All containers must be labeled", "SDS sheets accessible to all workers", "Read SDS before using a new chemical", "Report unlabeled containers immediately"], estimatedMinutes: 10, regulatoryRef: "29 CFR 1910.1200", requiresSignoff: true, companyId: null },
-  { id: 9, title: "Weekly Crew Safety Check-In", topic: "custom", industry: "construction", source: "custom", content: "<h2>Weekly Crew Safety Check-In</h2><p>A quick briefing to review site conditions, upcoming tasks, and any near-misses from the past week before starting Monday's work.</p>", keyPoints: ["Review near-misses from last week", "Confirm PPE availability for the crew", "Walk the site for new hazards"], estimatedMinutes: 5, regulatoryRef: null, requiresSignoff: true, companyId: 1 },
+export const FORM_TEMPLATES: { id: MockForm["template"]; label: string; description: string }[] = [
+  { id: "blank", label: "Blank Form", description: "Start from scratch" },
+  { id: "incident_report", label: "Incident Report", description: "Date, location, description, witnesses, corrective action" },
+  { id: "daily_checklist", label: "Daily Safety Checklist", description: "Site, crew, PPE check, hazards observed, sign-off" },
 ];
 
-// Mutable, module-level "store" so a talk duplicated/created on the library
-// page is still there when the app navigates to the builder/deliver routes
-// (separate component mounts can't share React state, but ES module live
-// bindings mean every importer always sees the current value here).
-export let toolboxTalksStore: MockToolboxTalk[] = [...MOCK_TOOLBOX_TALKS];
-let nextToolboxTalkId = Math.max(...MOCK_TOOLBOX_TALKS.map((t) => t.id)) + 1;
-
-export function addToolboxTalk(talk: Omit<MockToolboxTalk, "id">): MockToolboxTalk {
-  const created: MockToolboxTalk = { ...talk, id: nextToolboxTalkId++ };
-  toolboxTalksStore = [created, ...toolboxTalksStore];
-  return created;
-}
-
-export function updateToolboxTalk(id: number, patch: Partial<MockToolboxTalk>): void {
-  toolboxTalksStore = toolboxTalksStore.map((t) => (t.id === id ? { ...t, ...patch } : t));
-}
-
-export function removeToolboxTalk(id: number): void {
-  toolboxTalksStore = toolboxTalksStore.filter((t) => t.id !== id);
-}
-
-export function getToolboxTalk(id: number): MockToolboxTalk | undefined {
-  return toolboxTalksStore.find((t) => t.id === id);
-}
-
-const SEED_TOOLBOX_SESSIONS: MockToolboxSession[] = [
-  { id: 1, talkId: 1, location: "Main Site — Building A", conductedBy: "Sarah Chen", notes: null, status: "completed", startedAt: daysAgo(6), completedAt: daysAgo(6), signoffs: [
-    { name: "James Rodriguez", signature: "James Rodriguez", jobTitle: "Journeyman Carpenter" },
-    { name: "Marcus Bell", signature: "Marcus Bell", jobTitle: "Foreman" },
-  ] },
-  { id: 2, talkId: 3, location: "Shop Floor", conductedBy: "Sarah Chen", notes: "Reviewed after near-miss on Tuesday.", status: "completed", startedAt: daysAgo(2), completedAt: daysAgo(2), signoffs: [
-    { name: "Priya Patel", signature: "Priya Patel", jobTitle: "Electrician" },
-    { name: "Emily Osei", signature: "Emily Osei", jobTitle: "Apprentice Electrician" },
-  ] },
+export const MOCK_FORMS: MockForm[] = [
+  { id: 1, title: "Incident Report", description: "Report a workplace injury, near-miss, or property damage incident.", status: "published", ownerName: "Sarah Chen", template: "incident_report", createdAt: daysAgo(40), updatedAt: daysAgo(2) },
+  { id: 2, title: "Daily Safety Checklist — Framing Crew", description: "Pre-shift PPE and hazard check for the framing crew.", status: "published", ownerName: "Sarah Chen", template: "daily_checklist", createdAt: daysAgo(30), updatedAt: daysAgo(1) },
+  { id: 3, title: "Site Visitor Sign-In", description: "Sign-in sheet for visitors and subcontractors entering the job site.", status: "published", ownerName: "Amy Nguyen", template: "blank", createdAt: daysAgo(25), updatedAt: daysAgo(6) },
+  { id: 4, title: "New Hire Safety Orientation Acknowledgment", description: "Draft form for new employee orientation sign-off — not yet published.", status: "draft", ownerName: "Sarah Chen", template: "blank", createdAt: daysAgo(3), updatedAt: daysAgo(3) },
 ];
 
-export let toolboxSessionsStore: MockToolboxSession[] = [...SEED_TOOLBOX_SESSIONS];
-let nextToolboxSessionId = Math.max(...SEED_TOOLBOX_SESSIONS.map((s) => s.id)) + 1;
+export let formsStore: MockForm[] = [...MOCK_FORMS];
+let nextFormId = Math.max(...MOCK_FORMS.map((f) => f.id), 0) + 1;
 
-export function addToolboxSession(session: Omit<MockToolboxSession, "id">): MockToolboxSession {
-  const created: MockToolboxSession = { ...session, id: nextToolboxSessionId++ };
-  toolboxSessionsStore = [created, ...toolboxSessionsStore];
+export function getForm(id: number): MockForm | undefined {
+  return formsStore.find((f) => f.id === id);
+}
+export function addForm(input: { title: string; description: string; template: MockForm["template"]; ownerName: string }): MockForm {
+  const created: MockForm = {
+    id: nextFormId++,
+    title: input.title,
+    description: input.description,
+    status: "draft",
+    ownerName: input.ownerName,
+    template: input.template,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  formsStore = [created, ...formsStore];
   return created;
 }
+export function patchForm(id: number, patch: Partial<MockForm>): void {
+  formsStore = formsStore.map((f) => (f.id === id ? { ...f, ...patch, updatedAt: new Date() } : f));
+}
+export function removeForm(id: number): void {
+  formsStore = formsStore.filter((f) => f.id !== id);
+  formResponsesStore = formResponsesStore.filter((r) => r.formId !== id);
+}
 
-export function updateToolboxSession(id: number, patch: Partial<MockToolboxSession>): void {
-  toolboxSessionsStore = toolboxSessionsStore.map((s) => (s.id === id ? { ...s, ...patch } : s));
+const SEED_FORM_RESPONSES: MockFormResponse[] = [
+  { id: 1, formId: 1, respondentName: "James Rodriguez", submittedAt: daysAgo(5), answers: { location: "Building A, Level 2", description: "Minor laceration from a box cutter — first aid administered on site." } },
+  { id: 2, formId: 1, respondentName: "Derek Wallace", submittedAt: daysAgo(12), answers: { location: "Excavation Site 3", description: "Near-miss — equipment backed up without spotter present." } },
+  { id: 3, formId: 2, respondentName: "Marcus Bell", submittedAt: daysAgo(1), answers: { crew: "Framing Crew", ppeCheck: "Pass", hazardsObserved: "None" } },
+  { id: 4, formId: 2, respondentName: "James Rodriguez", submittedAt: daysAgo(2), answers: { crew: "Framing Crew", ppeCheck: "Pass", hazardsObserved: "Loose scaffold plank reported and corrected" } },
+  { id: 5, formId: 3, respondentName: "Priya Patel", submittedAt: daysAgo(6), answers: { company: "Summit Electrical Group", purpose: "Panel inspection", signature: "Priya Patel" } },
+];
+
+export let formResponsesStore: MockFormResponse[] = [...SEED_FORM_RESPONSES];
+
+export function getFormResponses(formId: number): MockFormResponse[] {
+  return formResponsesStore.filter((r) => r.formId === formId);
+}
+export function getResponseCount(formId: number): number {
+  return formResponsesStore.filter((r) => r.formId === formId).length;
 }

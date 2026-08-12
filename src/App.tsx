@@ -23,9 +23,6 @@ import LMSLogin from "./pages/lms/LMSLogin";
 import LMSDashboard from "./pages/lms/LMSDashboard";
 import LMSCourses from "./pages/lms/LMSCourses";
 import LMSBuilder from "./pages/lms/LMSBuilder";
-import LMSToolbox from "./pages/lms/LMSToolbox";
-import LMSToolboxBuilder from "./pages/lms/LMSToolboxBuilder";
-import LMSToolboxDeliver from "./pages/lms/LMSToolboxDeliver";
 import LMSCoursePlayer from "./pages/lms/LMSCoursePlayer";
 import LMSEmployees from "./pages/lms/LMSEmployees";
 import LMSAnalytics from "./pages/lms/LMSAnalytics";
@@ -44,6 +41,8 @@ import LMSAdminConversations from "./pages/lms/admin/LMSAdminConversations";
 import LMSAdminAnalytics from "./pages/lms/admin/LMSAdminAnalytics";
 import LMSBilling from "./pages/lms/LMSBilling";
 import LMSCourseBuilder from "./pages/lms/LMSCourseBuilder";
+import LMSCourseLibrary from "./pages/lms/LMSCourseLibrary";
+import LMSForms from "./pages/lms/LMSForms";
 
 function ScrollToTop() {
   const [location] = useLocation();
@@ -80,13 +79,11 @@ function Router() {
       <Route path="/lms/login" component={LMSLogin} />
       <Route path="/lms/dashboard" component={LMSDashboard} />
       <Route path="/lms/courses" component={LMSCourses} />
+      <Route path="/lms/course-library" component={LMSCourseLibrary} />
+      <Route path="/lms/forms" component={LMSForms} />
       <Route path="/lms/course-builder" component={LMSCourseBuilder} />
       <Route path="/lms/builder" component={LMSBuilder} />
       <Route path="/lms/builder/:courseId" component={LMSBuilder} />
-      <Route path="/lms/toolbox" component={LMSToolbox} />
-      <Route path="/lms/toolbox/builder/new" component={LMSToolboxBuilder} />
-      <Route path="/lms/toolbox/builder/:id" component={LMSToolboxBuilder} />
-      <Route path="/lms/toolbox/deliver/:id" component={LMSToolboxDeliver} />
       <Route path="/lms/course-player" component={LMSCoursePlayer} />
       <Route path="/lms/courses/:id" component={LMSCoursePlayer} />
       <Route path="/lms/employees" component={LMSEmployees} />

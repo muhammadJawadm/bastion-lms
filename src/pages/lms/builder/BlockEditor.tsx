@@ -1,14 +1,14 @@
 /* ============================================================
    BLOCK EDITOR — Individual block rendering and editing
    ============================================================ */
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   GripVertical, Trash2, ChevronDown, ChevronUp,
   Type, Video, Image, FileText, Package, CheckSquare,
   ThumbsUp, FileCheck, PenLine, Info, AlertTriangle, Lightbulb,
-  HelpCircle, Plus, X, Upload, Link2, Loader2, Film,
+  HelpCircle, Plus, X, Upload, Link2, Loader2, Film, ClipboardList,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,7 +23,7 @@ import type {
   TextBlockData, VideoBlockData, ImageBlockData, PdfBlockData,
   ResourceBlockData, ChecklistBlockData, AcknowledgmentBlockData,
   PolicyAckBlockData, CalloutBlockData, WarningBlockData, SafetyTipBlockData,
-  CanvasSlideData, FillInTheBlankData, DragDropData,
+  CanvasSlideData, FillInTheBlankData, DragDropData, AssignmentBlockData,
 } from "./types";
 import { RichTextEditor } from "./RichTextEditor";
 import { SlideCanvas } from "./SlideCanvas";
@@ -31,23 +31,29 @@ import { FillInTheBlankEditor, DragDropEditor } from "./InteractiveQuestions";
 
 // ─── Block type metadata ──────────────────────────────────────────────────────
 
+// Neutral card treatment for every block type — the picker/canvas no longer
+// assigns a different saturated color per block type. Royal Blue is applied
+// only on hover, keyboard focus, and selection (see BlockPicker/BlockWrapper).
+const NEUTRAL_BLOCK_COLOR = "bg-white text-gray-700 border-gray-200";
+
 export const BLOCK_TYPES: { type: BlockType; label: string; icon: React.ReactNode; description: string; color: string }[] = [
-  { type: "text", label: "Text / Rich Content", icon: <Type size={16} />, description: "Paragraphs, headings, lists, and formatted text", color: "bg-blue-50 text-blue-600 border-blue-200" },
-  { type: "video", label: "Video", icon: <Video size={16} />, description: "YouTube, Vimeo, or direct video URL", color: "bg-purple-50 text-purple-600 border-purple-200" },
-  { type: "image", label: "Image", icon: <Image size={16} />, description: "Photo, diagram, or infographic", color: "bg-green-50 text-green-600 border-green-200" },
-  { type: "pdf", label: "PDF Document", icon: <FileText size={16} />, description: "Safety manual, SOP, or reference document", color: "bg-red-50 text-red-600 border-red-200" },
-  { type: "resource", label: "Resource / Download", icon: <Package size={16} />, description: "Downloadable file or external link", color: "bg-orange-50 text-orange-600 border-orange-200" },
-  { type: "checklist", label: "Safety Checklist", icon: <CheckSquare size={16} />, description: "Interactive checklist employees must complete", color: "bg-teal-50 text-teal-600 border-teal-200" },
-  { type: "acknowledgment", label: "Acknowledgment", icon: <ThumbsUp size={16} />, description: "Employee confirms they understand the content", color: "bg-indigo-50 text-indigo-600 border-indigo-200" },
-  { type: "policy_ack", label: "Policy Acknowledgment", icon: <FileCheck size={16} />, description: "Employee reads and acknowledges a policy", color: "bg-violet-50 text-violet-600 border-violet-200" },
-  { type: "signature", label: "Signature Block", icon: <PenLine size={16} />, description: "Employee types their name as a digital signature", color: "bg-pink-50 text-pink-600 border-pink-200" },
+  { type: "text", label: "Text / Rich Content", icon: <Type size={16} />, description: "Paragraphs, headings, lists, and formatted text", color: NEUTRAL_BLOCK_COLOR },
+  { type: "video", label: "Video", icon: <Video size={16} />, description: "YouTube, Vimeo, or direct video URL", color: NEUTRAL_BLOCK_COLOR },
+  { type: "image", label: "Image", icon: <Image size={16} />, description: "Photo, diagram, or infographic", color: NEUTRAL_BLOCK_COLOR },
+  { type: "pdf", label: "PDF Document", icon: <FileText size={16} />, description: "Safety manual, SOP, or reference document", color: NEUTRAL_BLOCK_COLOR },
+  { type: "assignment", label: "Assignment", icon: <ClipboardList size={16} />, description: "Task employees must complete and submit", color: NEUTRAL_BLOCK_COLOR },
+  { type: "resource", label: "Resource / Download", icon: <Package size={16} />, description: "Downloadable file or external link", color: NEUTRAL_BLOCK_COLOR },
+  { type: "checklist", label: "Safety Checklist", icon: <CheckSquare size={16} />, description: "Interactive checklist employees must complete", color: NEUTRAL_BLOCK_COLOR },
+  { type: "acknowledgment", label: "Acknowledgment", icon: <ThumbsUp size={16} />, description: "Employee confirms they understand the content", color: NEUTRAL_BLOCK_COLOR },
+  { type: "policy_ack", label: "Policy Acknowledgment", icon: <FileCheck size={16} />, description: "Employee reads and acknowledges a policy", color: NEUTRAL_BLOCK_COLOR },
+  { type: "signature", label: "Signature Block", icon: <PenLine size={16} />, description: "Employee types their name as a digital signature", color: NEUTRAL_BLOCK_COLOR },
   // callout block removed per Session 15 (may be re-added later)
-  { type: "warning", label: "Warning / Danger Box", icon: <AlertTriangle size={16} />, description: "Safety warning, caution, or danger notice", color: "bg-yellow-50 text-yellow-700 border-yellow-200" },
-  { type: "safety_tip", label: "Safety Tip", icon: <Lightbulb size={16} />, description: "Quick safety reminder or best practice", color: "bg-amber-50 text-amber-600 border-amber-200" },
-  { type: "quiz_question", label: "Quiz Question", icon: <HelpCircle size={16} />, description: "Inline knowledge check question", color: "bg-rose-50 text-rose-600 border-rose-200" },
+  { type: "warning", label: "Warning / Danger Box", icon: <AlertTriangle size={16} />, description: "Safety warning, caution, or danger notice", color: NEUTRAL_BLOCK_COLOR },
+  { type: "safety_tip", label: "Safety Tip", icon: <Lightbulb size={16} />, description: "Quick safety reminder or best practice", color: NEUTRAL_BLOCK_COLOR },
+  { type: "quiz_question", label: "Quiz Question", icon: <HelpCircle size={16} />, description: "Inline knowledge check question", color: NEUTRAL_BLOCK_COLOR },
   // canvas_slide removed per Session 15 (advanced editor planned for later)
-  { type: "quiz_fitb", label: "Fill in the Blank", icon: <Type size={16} />, description: "Type the missing word(s)", color: "bg-violet-50 text-violet-600 border-violet-200" },
-  { type: "quiz_dragdrop", label: "Drag & Drop", icon: <CheckSquare size={16} />, description: "Drag words from a word bank into blanks", color: "bg-teal-50 text-teal-600 border-teal-200" },
+  { type: "quiz_fitb", label: "Fill in the Blank", icon: <Type size={16} />, description: "Type the missing word(s)", color: NEUTRAL_BLOCK_COLOR },
+  { type: "quiz_dragdrop", label: "Drag & Drop", icon: <CheckSquare size={16} />, description: "Drag words from a word bank into blanks", color: NEUTRAL_BLOCK_COLOR },
 ];
 
 export function getBlockMeta(type: BlockType) {
@@ -63,6 +69,7 @@ export function getDefaultData(type: BlockType): BlockData {
     case "image": return { url: "", alt: "", caption: "", width: "full" } as ImageBlockData;
     case "pdf": return { url: "", title: "", downloadable: true } as PdfBlockData;
     case "resource": return { url: "", title: "Resource", description: "", fileType: "PDF" } as ResourceBlockData;
+    case "assignment": return { title: "Assignment", instructions: "Describe what employees need to do and submit.", submissionType: "text", dueOffsetDays: 7 } as AssignmentBlockData;
     case "checklist": return { title: "Pre-Task Safety Checklist", items: [{ id: crypto.randomUUID(), text: "Item 1", required: true }], requireAll: true } as ChecklistBlockData;
     case "acknowledgment": return { statement: "I have read and understand the content above.", checkboxLabel: "I acknowledge" } as AcknowledgmentBlockData;
     case "policy_ack": return { policyTitle: "Safety Policy", policyText: "Enter policy text here...", checkboxLabel: "I have read and agree to this policy", requireSignature: false } as PolicyAckBlockData;
@@ -213,6 +220,9 @@ export function BlockEditorContent({ block, onUpdate }: BlockEditorProps) {
 
     case "pdf":
       return <PdfBlockEditor data={data} onUpdate={onUpdate} />;
+
+    case "assignment":
+      return <AssignmentBlockEditor data={data} onUpdate={onUpdate} />;
 
     case "resource":
       return (
@@ -575,6 +585,72 @@ function ChecklistEditor({ data, onUpdate }: { data: Record<string, unknown>; on
   );
 }
 
+// ─── Assignment editor ────────────────────────────────────────────────────────
+
+function AssignmentBlockEditor({ data, onUpdate }: { data: Record<string, unknown>; onUpdate: (d: BlockData) => void }) {
+  const submissionType = (data.submissionType as AssignmentBlockData["submissionType"]) ?? "text";
+
+  return (
+    <div className="p-4 space-y-3">
+      <div className="space-y-1">
+        <Label className="text-xs font-display font-bold text-gray-600">Assignment Title</Label>
+        <Input
+          value={(data.title as string) ?? ""}
+          onChange={e => onUpdate({ ...data, title: e.target.value } as AssignmentBlockData)}
+          placeholder="e.g. Site Hazard Walkthrough Report"
+          className="font-body text-sm"
+        />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs font-display font-bold text-gray-600">Instructions</Label>
+        <Textarea
+          value={(data.instructions as string) ?? ""}
+          onChange={e => onUpdate({ ...data, instructions: e.target.value } as AssignmentBlockData)}
+          placeholder="Describe what the employee needs to do and submit..."
+          className="font-body text-sm resize-none"
+          rows={4}
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label className="text-xs font-display font-bold text-gray-600">Submission Type</Label>
+          <select
+            value={submissionType}
+            onChange={e => onUpdate({ ...data, submissionType: e.target.value } as AssignmentBlockData)}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-body"
+          >
+            <option value="text">Written Response</option>
+            <option value="file">File Upload</option>
+            <option value="either">Either</option>
+          </select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs font-display font-bold text-gray-600">Due (days after assignment)</Label>
+          <Input
+            type="number"
+            min={0}
+            value={(data.dueOffsetDays as number) ?? 7}
+            onChange={e => onUpdate({ ...data, dueOffsetDays: Number(e.target.value) } as AssignmentBlockData)}
+            className="font-body text-sm"
+          />
+        </div>
+      </div>
+      <div className="flex items-start gap-3 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+        <ClipboardList size={18} className="text-orange-600 shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-display font-bold text-orange-800">{(data.title as string) || "Assignment"}</p>
+          <p className="text-xs font-body text-orange-700 mt-0.5">
+            {(data.instructions as string) || "Assignment instructions preview appears here."}
+          </p>
+          <p className="text-[10px] font-body text-orange-500 mt-1 uppercase tracking-wide">
+            {submissionType === "text" ? "Written response" : submissionType === "file" ? "File upload" : "Written response or file upload"} · Due {(data.dueOffsetDays as number) ?? 7} day{((data.dueOffsetDays as number) ?? 7) === 1 ? "" : "s"} after assignment
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Quiz question editor ─────────────────────────────────────────────────────
 
 function QuizQuestionEditor({ data, onUpdate }: { data: Record<string, unknown>; onUpdate: (d: BlockData) => void }) {
@@ -753,22 +829,18 @@ function ImageBlockEditor({
   const [mode, setMode] = useState<"upload" | "url">((data.url as string) ? "url" : "upload");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const uploadBase64 = { mutateAsync: mockUploadFile };
 
-  /** Handle file selected from desktop */
-  const handleFileChange = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      // Validate MIME type
+  /** Shared upload path for file-input selection, drag-and-drop, and clipboard paste. */
+  const handleFile = useCallback(
+    async (file: File) => {
       if (!file.type.startsWith("image/")) {
         setUploadError("Please select an image file (JPG, PNG, GIF, WebP).");
         return;
       }
-      // 10 MB limit
       if (file.size > 10 * 1024 * 1024) {
         setUploadError("Image must be under 10 MB.");
         return;
@@ -778,7 +850,6 @@ function ImageBlockEditor({
       setUploading(true);
 
       try {
-        // Read as base64
         const base64 = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve((reader.result as string).split(",")[1]);
@@ -805,8 +876,46 @@ function ImageBlockEditor({
     [data, onUpdate, uploadBase64]
   );
 
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) void handleFile(file);
+      e.target.value = ""; // allow re-selecting the same file
+    },
+    [handleFile]
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      const file = e.dataTransfer.files?.[0];
+      if (file) void handleFile(file);
+    },
+    [handleFile]
+  );
+
+  // Paste an image directly from the clipboard while this block is the one being edited.
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.items ?? []).find(i => i.type.startsWith("image/"));
+      const file = item?.getAsFile();
+      if (file) {
+        e.preventDefault();
+        void handleFile(file);
+      }
+    };
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, [handleFile]);
+
   return (
-    <div className="p-4 space-y-3">
+    <div
+      className={cn("p-4 space-y-3 rounded-lg transition-colors", dragging && "bg-[#0047AB]/5 ring-2 ring-[#0047AB]/30")}
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+    >
       {/* Mode toggle */}
       <div className="flex gap-2">
         <button
@@ -835,21 +944,25 @@ function ImageBlockEditor({
         </button>
       </div>
 
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
       {/* Upload mode */}
       {mode === "upload" && (
         <div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleFileChange}
-          />
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="w-full flex flex-col items-center justify-center gap-2 p-6 border-2 border-dashed border-gray-300 hover:border-[#0047AB] rounded-xl transition-colors group"
+            className={cn(
+              "w-full flex flex-col items-center justify-center gap-2 p-6 border-2 border-dashed rounded-xl transition-colors group",
+              dragging ? "border-[#0047AB] bg-[#0047AB]/5" : "border-gray-300 hover:border-[#0047AB]"
+            )}
           >
             {uploading ? (
               <>
@@ -860,7 +973,7 @@ function ImageBlockEditor({
               <>
                 <Upload size={24} className="text-gray-400 group-hover:text-[#0047AB] transition-colors" />
                 <span className="text-sm font-display font-bold text-gray-600 group-hover:text-[#0047AB] transition-colors">
-                  Click to select an image
+                  Click, drag & drop, or paste an image
                 </span>
                 <span className="text-[11px] font-body text-gray-400">JPG, PNG, GIF, WebP — max 10 MB</span>
               </>
@@ -910,14 +1023,26 @@ function ImageBlockEditor({
         </div>
       </div>
 
-      {/* Preview */}
+      {/* Preview — click the image itself to replace it */}
       {!!(data.url as string) && (
-        <div className="relative rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
-          <img
-            src={data.url as string}
-            alt={(data.alt as string) ?? ""}
-            className="max-w-full max-h-64 object-contain mx-auto block"
-          />
+        <div className="relative rounded-lg overflow-hidden border border-gray-200 bg-gray-50 group/preview">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            title="Click to replace this image"
+            className="block w-full"
+          >
+            <img
+              src={data.url as string}
+              alt={(data.alt as string) ?? ""}
+              className="max-w-full max-h-64 object-contain mx-auto block"
+            />
+            <div className="absolute inset-0 bg-black/0 group-hover/preview:bg-black/30 transition-colors flex items-center justify-center opacity-0 group-hover/preview:opacity-100">
+              <span className="flex items-center gap-1.5 bg-white/95 text-[#0F1C2E] text-xs font-display font-bold px-3 py-1.5 rounded-lg">
+                <Upload size={12} />Replace
+              </span>
+            </div>
+          </button>
           <button
             type="button"
             onClick={() => onUpdate({ ...data, url: "" } as ImageBlockData)}
@@ -948,15 +1073,13 @@ function VideoBlockEditor({
   const [mode, setMode] = useState<"upload" | "url">((data.url as string) ? "url" : "upload");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const uploadBase64 = { mutateAsync: mockUploadFile };
 
-  const handleFileChange = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
+  const handleFile = useCallback(
+    async (file: File) => {
       if (!file.type.startsWith("video/")) {
         setUploadError("Please select a video file (MP4, MOV, WebM).");
         return;
@@ -997,11 +1120,35 @@ function VideoBlockEditor({
     [data, onUpdate, uploadBase64]
   );
 
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) void handleFile(file);
+      e.target.value = "";
+    },
+    [handleFile]
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      const file = e.dataTransfer.files?.[0];
+      if (file) void handleFile(file);
+    },
+    [handleFile]
+  );
+
   const embedUrl = (data.url as string) ? getVideoEmbedUrl(data.url as string) : "";
   const isEmbed = embedUrl !== (data.url as string); // true if it's a YouTube/Vimeo URL
 
   return (
-    <div className="p-4 space-y-3">
+    <div
+      className={cn("p-4 space-y-3 rounded-lg transition-colors", dragging && "bg-[#0047AB]/5 ring-2 ring-[#0047AB]/30")}
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+    >
       {/* Mode toggle */}
       <div className="flex gap-2">
         <button
@@ -1044,7 +1191,10 @@ function VideoBlockEditor({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="w-full flex flex-col items-center justify-center gap-2 p-6 border-2 border-dashed border-gray-300 hover:border-[#0047AB] rounded-xl transition-colors group"
+            className={cn(
+              "w-full flex flex-col items-center justify-center gap-2 p-6 border-2 border-dashed rounded-xl transition-colors group",
+              dragging ? "border-[#0047AB] bg-[#0047AB]/5" : "border-gray-300 hover:border-[#0047AB]"
+            )}
           >
             {uploading ? (
               <>
@@ -1055,7 +1205,7 @@ function VideoBlockEditor({
               <>
                 <Film size={24} className="text-gray-400 group-hover:text-[#0047AB] transition-colors" />
                 <span className="text-sm font-display font-bold text-gray-600 group-hover:text-[#0047AB] transition-colors">
-                  Click to select a video
+                  Click to select or drag & drop a video
                 </span>
                 <span className="text-[11px] font-body text-gray-400">MP4, MOV, WebM — max 200 MB</span>
               </>

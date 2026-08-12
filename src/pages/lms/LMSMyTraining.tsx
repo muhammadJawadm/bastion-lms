@@ -150,15 +150,18 @@ export default function LMSMyTraining() {
             <Skeleton className="h-16 w-full rounded-xl" />
           ) : certificates && certificates.length > 0 ? (
             <div className="space-y-2">
-              {certificates.map((cert) => (
+              {certificates.map((cert) => {
+                const certCourse = getCourse(cert.courseId);
+                const certTitle = certCourse?.certificateTitle || certCourse?.title || `Certificate #${cert.certificateNumber}`;
+                return (
                 <div key={cert.id} className="bg-white rounded-xl border border-gray-100 p-4 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-[#0047AB]/10 flex items-center justify-center flex-shrink-0">
                     <Award className="w-5 h-5 text-[#0047AB]" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-[#0F1C2E] text-sm">Certificate #{cert.certificateNumber}</div>
+                    <div className="font-semibold text-[#0F1C2E] text-sm truncate">{certTitle}</div>
                     <div className="text-xs text-gray-400">
-                      Issued {new Date(cert.issuedAt).toLocaleDateString()}
+                      Certificate #{cert.certificateNumber} · Issued {new Date(cert.issuedAt).toLocaleDateString()}
                       {cert.expiresAt && ` · Expires ${new Date(cert.expiresAt).toLocaleDateString()}`}
                     </div>
                   </div>
@@ -177,7 +180,8 @@ export default function LMSMyTraining() {
                     </Button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <Empty className="bg-white rounded-xl border border-gray-100 py-10">

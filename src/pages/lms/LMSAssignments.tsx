@@ -9,6 +9,7 @@ import { useState, useMemo } from "react";
 import { Plus, Clock, CheckCircle2, AlertTriangle, Users, BookOpen, Loader2 } from "lucide-react";
 import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
+import { CourseSectionTabs } from "./components/CourseSectionTabs";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +21,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { MOCK_COURSES, MOCK_EMPLOYEES, MOCK_ENROLLMENTS, type MockEnrollment } from "./mockData";
+import { MOCK_COURSES, MOCK_EMPLOYEES, enrollmentsStore, addEnrollment, type MockEnrollment } from "./mockData";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   assigned: { label: "Not Started", color: "bg-gray-100 text-gray-500" },
@@ -34,8 +35,6 @@ function initialsOf(value: string): string {
   return value.split(" ").filter(Boolean).map((n) => n[0]).join("").toUpperCase().slice(0, 2);
 }
 
-let nextMockEnrollmentId = Math.max(...MOCK_ENROLLMENTS.map((e) => e.id)) + 1;
-
 function AssignModal({
   companyId,
   open,
@@ -45,7 +44,7 @@ function AssignModal({
   companyId: number;
   open: boolean;
   onClose: () => void;
-  onAssigned: (rows: MockEnrollment[]) => void;
+  onAssigned: () => void;
 }) {
   const [selectedCourse, setSelectedCourse] = useState<number | "">("");
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
@@ -70,18 +69,18 @@ function AssignModal({
     setIsPending(true);
     setTimeout(() => {
       setIsPending(false);
-      const rows: MockEnrollment[] = selectedUsers.map((userId) => ({
-        id: nextMockEnrollmentId++,
-        userId,
-        courseId: Number(selectedCourse),
-        companyId,
-        status: "assigned",
-        progressPct: 0,
-        dueDate: dueDate ? new Date(dueDate) : null,
-        completedAt: null,
-        createdAt: new Date(),
-      }));
-      onAssigned(rows);
+      selectedUsers.forEach((userId) => {
+        addEnrollment({
+          userId,
+          courseId: Number(selectedCourse),
+          companyId,
+          status: "assigned",
+          progressPct: 0,
+          dueDate: dueDate ? new Date(dueDate) : null,
+          completedAt: null,
+        });
+      });
+      onAssigned();
       toast.success(`Assigned to ${selectedUsers.length} employee(s)`);
       setSelectedCourse(""); setSelectedUsers([]); setDueDate("");
       onClose();
@@ -167,7 +166,7 @@ function AssignModal({
 export default function LMSAssignments() {
   const { role, setRole, user } = useLMS();
   const [showModal, setShowModal] = useState(false);
-  const [enrollments, setEnrollments] = useState<MockEnrollment[]>(MOCK_ENROLLMENTS);
+  const [enrollments, setEnrollments] = useState<MockEnrollment[]>(enrollmentsStore);
 
   const companyId = (user as any)?.companyId ?? 0;
   const employees = MOCK_EMPLOYEES;
@@ -200,8 +199,10 @@ export default function LMSAssignments() {
       onRoleChange={setRole}
     >
       {companyId > 0 && (
-        <AssignModal companyId={companyId} open={showModal} onClose={() => setShowModal(false)} onAssigned={(rows) => setEnrollments((prev) => [...rows, ...prev])} />
+        <AssignModal companyId={companyId} open={showModal} onClose={() => setShowModal(false)} onAssigned={() => setEnrollments([...enrollmentsStore])} />
       )}
+
+      <CourseSectionTabs active="assignments" />
 
       <div className="space-y-5">
         {/* Header */}
