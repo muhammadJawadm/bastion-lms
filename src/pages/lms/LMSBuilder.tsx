@@ -1227,7 +1227,6 @@ export default function LMSBuilder() {
         </button>
         <div className="w-px h-5 bg-white/20" />
         <div className="flex items-center gap-2 min-w-0">
-          <Shield size={16} className="text-[#1E90FF] shrink-0" />
           <span className="font-display font-bold text-white text-sm truncate max-w-xs">{course.title}</span>
           <StatusBadge status={courseStatus} />
         </div>
