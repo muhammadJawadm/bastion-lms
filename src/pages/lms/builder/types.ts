@@ -332,7 +332,7 @@ export interface ResourceBlockData { url: string; title: string; description?: s
 export interface ChecklistItem { id: string; text: string; required?: boolean; }
 
 /** Data payload for a `checklist` block. */
-export interface ChecklistBlockData { title?: string; items: ChecklistItem[]; requireAll?: boolean; }
+export interface ChecklistBlockData { title?: string; items: ChecklistItem[]; requireAll?: boolean; supportingMediaUrl?: string; }
 
 /** Data payload for an `acknowledgment` block. */
 export interface AcknowledgmentBlockData { statement: string; checkboxLabel?: string; }
@@ -341,7 +341,7 @@ export interface AcknowledgmentBlockData { statement: string; checkboxLabel?: st
 export interface PolicyAckBlockData { policyTitle: string; policyText: string; checkboxLabel?: string; requireSignature?: boolean; }
 
 /** Data payload for a `signature` block. */
-export interface SignatureBlockData { prompt?: string; label?: string; }
+export interface SignatureBlockData { prompt?: string; label?: string; supportingMediaUrl?: string; }
 
 /** Data payload for a `callout` block. */
 export interface CalloutBlockData { title?: string; body: string; variant: "info" | "tip" | "note"; }
@@ -358,10 +358,15 @@ export interface AssignmentBlockData {
   instructions: string;
   submissionType: "text" | "file" | "either";
   dueOffsetDays?: number;
+  supportingMediaUrl?: string;
 }
 
-/** Data payload for a `quiz_question` (legacy alias) block. */
-export interface QuizQuestionBlockData { question: QuizQuestion; }
+/**
+ * Data payload for a `quiz_question` (legacy alias) block.
+ * When `question.type === "fill_blank"`, `fillBlank` holds the word-bank
+ * payload (reusing `DragDropData`'s shape) instead of `question.options`.
+ */
+export interface QuizQuestionBlockData { question: QuizQuestion; fillBlank?: DragDropData; }
 
 /**
  * Union of all possible block data payloads.

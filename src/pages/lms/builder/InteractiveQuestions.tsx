@@ -947,7 +947,7 @@ export function DragDropViewer({ data, onAnswer, answered: externalAnswered }: D
   return (
     <div className="space-y-4 p-4">
       {/* Sentence with drop zones */}
-      <div className="text-white text-base leading-loose flex flex-wrap items-center gap-1">
+      <div className="text-black text-base leading-loose flex flex-wrap items-center gap-1">
         {segments.map((segment, i) => {
           if (segment.type === "text") {
             return <span key={i}>{segment.value}</span>;
@@ -966,7 +966,7 @@ export function DragDropViewer({ data, onAnswer, answered: externalAnswered }: D
               className={cn(
                 "inline-flex items-center justify-center min-w-[80px] h-9 px-3 rounded-md border-2 border-dashed cursor-pointer transition-all text-sm font-medium",
                 !isAnswered && !placedWord && "border-blue-400 bg-blue-400/10 text-gray-400 hover:bg-blue-400/20",
-                !isAnswered && placedWord && "border-blue-500 bg-blue-500/20 text-white",
+                !isAnswered && placedWord && "border-blue-500 bg-blue-500/20 text-black",
                 isAnswered && correct && "border-green-500 bg-green-500/20 text-green-300 border-solid",
                 isAnswered && !correct && "border-red-500 bg-red-500/20 text-red-300 border-solid"
               )}

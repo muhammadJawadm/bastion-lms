@@ -8,7 +8,7 @@ import {
   GripVertical, Trash2, ChevronDown, ChevronUp,
   Type, Video, Image, FileText, Package, CheckSquare,
   ThumbsUp, FileCheck, PenLine, Info, AlertTriangle, Lightbulb,
-  HelpCircle, Plus, X, Upload, Link2, Loader2, Film, ClipboardList,
+  HelpCircle, Plus, X, Upload, Link2, Loader2, Film, ClipboardList, Palette,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { mockUploadFile } from "../mockData";
 import type {
@@ -37,13 +38,13 @@ import { FillInTheBlankEditor, DragDropEditor } from "./InteractiveQuestions";
 const NEUTRAL_BLOCK_COLOR = "bg-white text-gray-700 border-gray-200";
 
 export const BLOCK_TYPES: { type: BlockType; label: string; icon: React.ReactNode; description: string; color: string }[] = [
-  { type: "text", label: "Text / Rich Content", icon: <Type size={16} />, description: "Paragraphs, headings, lists, and formatted text", color: NEUTRAL_BLOCK_COLOR },
+  { type: "text", label: "Text / Blank Page", icon: <Type size={16} />, description: "Paragraphs, headings, lists, images, and formatted text", color: NEUTRAL_BLOCK_COLOR },
   { type: "video", label: "Video", icon: <Video size={16} />, description: "YouTube, Vimeo, or direct video URL", color: NEUTRAL_BLOCK_COLOR },
   { type: "image", label: "Image", icon: <Image size={16} />, description: "Photo, diagram, or infographic", color: NEUTRAL_BLOCK_COLOR },
   { type: "pdf", label: "PDF Document", icon: <FileText size={16} />, description: "Safety manual, SOP, or reference document", color: NEUTRAL_BLOCK_COLOR },
   { type: "assignment", label: "Assignment", icon: <ClipboardList size={16} />, description: "Task employees must complete and submit", color: NEUTRAL_BLOCK_COLOR },
   { type: "resource", label: "Resource / Download", icon: <Package size={16} />, description: "Downloadable file or external link", color: NEUTRAL_BLOCK_COLOR },
-  { type: "checklist", label: "Safety Checklist", icon: <CheckSquare size={16} />, description: "Interactive checklist employees must complete", color: NEUTRAL_BLOCK_COLOR },
+  { type: "checklist", label: "Checklist", icon: <CheckSquare size={16} />, description: "Interactive checklist employees must complete", color: NEUTRAL_BLOCK_COLOR },
   { type: "acknowledgment", label: "Acknowledgment", icon: <ThumbsUp size={16} />, description: "Employee confirms they understand the content", color: NEUTRAL_BLOCK_COLOR },
   { type: "policy_ack", label: "Policy Acknowledgment", icon: <FileCheck size={16} />, description: "Employee reads and acknowledges a policy", color: NEUTRAL_BLOCK_COLOR },
   { type: "signature", label: "Signature Block", icon: <PenLine size={16} />, description: "Employee types their name as a digital signature", color: NEUTRAL_BLOCK_COLOR },
@@ -139,14 +140,33 @@ interface BlockWrapperProps {
   children: React.ReactNode;
 }
 
+/** Padding/background/corner-radius stored alongside a block's own `data`. */
+export interface BlockStyle {
+  padding?: number;
+  background?: string;
+  borderRadius?: number;
+}
+
+const STYLE_BACKGROUNDS = ["", "#F4F6F9", "#EFF6FF", "#FEF3C7", "#ECFDF5", "#FEF2F2"];
+
 export function BlockWrapper({ block, isSelected, onSelect, onDelete, onUpdate, children }: BlockWrapperProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id });
   const meta = getBlockMeta(block.type);
+  const blockStyle = ((block.data as Record<string, unknown>)?.style as BlockStyle) ?? {};
+
+  const updateStyle = (patch: Partial<BlockStyle>) => {
+    // onUpdate replaces the block's whole `data` object, so the rest of the
+    // block's content must be spread through alongside the new style.
+    onUpdate({ ...(block.data as object), style: { ...blockStyle, ...patch } } as unknown as Partial<BlockData>);
+  };
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
+    padding: blockStyle.padding ? `${blockStyle.padding}px` : undefined,
+    background: blockStyle.background || undefined,
+    borderRadius: blockStyle.borderRadius != null ? `${blockStyle.borderRadius}px` : undefined,
   };
 
   return (
@@ -176,6 +196,41 @@ export function BlockWrapper({ block, isSelected, onSelect, onDelete, onUpdate, 
           {meta.icon}
           {meta.label}
         </span>
+      </div>
+
+      {/* Style (padding / background / corner radius) */}
+      <div className="absolute -top-3 right-9 opacity-0 group-hover:opacity-100 transition-opacity z-10" onClick={e => e.stopPropagation()}>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button className="bg-white border border-gray-200 shadow-sm hover:border-[#0047AB] hover:text-[#0047AB] text-gray-500 rounded-full p-1" title="Block style">
+              <Palette size={12} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-56 space-y-3" align="end">
+            <div className="space-y-1">
+              <Label className="text-[10px] font-display font-bold text-gray-500 uppercase tracking-wide">Padding ({blockStyle.padding ?? 0}px)</Label>
+              <input type="range" min={0} max={48} step={4} value={blockStyle.padding ?? 0} onChange={e => updateStyle({ padding: Number(e.target.value) })} className="w-full accent-[#0047AB]" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-[10px] font-display font-bold text-gray-500 uppercase tracking-wide">Corner Radius ({blockStyle.borderRadius ?? 0}px)</Label>
+              <input type="range" min={0} max={24} step={2} value={blockStyle.borderRadius ?? 0} onChange={e => updateStyle({ borderRadius: Number(e.target.value) })} className="w-full accent-[#0047AB]" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-[10px] font-display font-bold text-gray-500 uppercase tracking-wide">Background</Label>
+              <div className="flex gap-1.5">
+                {STYLE_BACKGROUNDS.map(c => (
+                  <button
+                    key={c || "none"}
+                    onClick={() => updateStyle({ background: c })}
+                    className={cn("w-6 h-6 rounded-full border", (blockStyle.background || "") === c ? "border-[#0047AB] border-2" : "border-gray-200")}
+                    style={{ background: c || "repeating-conic-gradient(#e5e7eb 0% 25%, white 0% 50%) 50% / 8px 8px" }}
+                    title={c || "None"}
+                  />
+                ))}
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
 
       {/* Delete button */}
@@ -370,6 +425,11 @@ export function BlockEditorContent({ block, onUpdate }: BlockEditorProps) {
               className="font-body text-sm"
             />
           </div>
+          <SupportingMediaField
+            url={data.supportingMediaUrl as string | undefined}
+            onChange={(url) => onUpdate({ ...data, supportingMediaUrl: url || undefined })}
+            label="Policy / Document Image (optional)"
+          />
           <div className="p-3 bg-pink-50 border border-pink-200 rounded-lg">
             <p className="text-xs text-pink-700 font-body mb-2">{(data.prompt as string) || "By typing your name below, you confirm your understanding."}</p>
             <Input disabled placeholder="Employee types their name here" className="font-body text-sm bg-white" />
@@ -574,6 +634,11 @@ function ChecklistEditor({ data, onUpdate }: { data: Record<string, unknown>; on
           <Plus size={12} className="mr-1" />Add Item
         </Button>
       </div>
+      <SupportingMediaField
+        url={data.supportingMediaUrl as string | undefined}
+        onChange={(url) => onUpdate({ ...data, supportingMediaUrl: url || undefined } as ChecklistBlockData)}
+        label="Reference Photo / Diagram (optional)"
+      />
       <div className="flex items-center gap-2">
         <Switch
           checked={(data.requireAll as boolean) ?? true}
@@ -635,6 +700,11 @@ function AssignmentBlockEditor({ data, onUpdate }: { data: Record<string, unknow
           />
         </div>
       </div>
+      <SupportingMediaField
+        url={data.supportingMediaUrl as string | undefined}
+        onChange={(url) => onUpdate({ ...data, supportingMediaUrl: url || undefined } as AssignmentBlockData)}
+        label="Reference Photo (optional)"
+      />
       <div className="flex items-start gap-3 p-3 bg-orange-50 border border-orange-200 rounded-lg">
         <ClipboardList size={18} className="text-orange-600 shrink-0 mt-0.5" />
         <div>
@@ -657,10 +727,50 @@ function QuizQuestionEditor({ data, onUpdate }: { data: Record<string, unknown>;
   const q = (data.question as import("./types").QuizQuestion) ?? {
     id: crypto.randomUUID(), type: "multiple_choice", question: "", options: ["", "", "", ""], correctIndices: [0],
   };
+  const fillBlank = (data.fillBlank as DragDropData) ?? {
+    template: "The {{blank}} is required when working at heights above {{blank}} feet.",
+    correctAnswers: ["harness", "6"],
+    wordBank: ["harness", "6", "helmet", "10", "gloves", "4"],
+    explanation: "",
+  };
 
   const update = (patch: Partial<import("./types").QuizQuestion>) => {
-    onUpdate({ question: { ...q, ...patch } });
+    onUpdate({ ...data, question: { ...q, ...patch } } as BlockData);
   };
+
+  // Fill in the Blank is the 4th approved question type — it reuses the existing,
+  // already-accessible (click-or-drag) word-bank editor from InteractiveQuestions.tsx
+  // rather than introducing a separate standalone block type.
+  if (q.type === "fill_blank") {
+    const noAnswers = fillBlank.correctAnswers.every(a => !a.trim());
+    return (
+      <div className="p-4 space-y-3">
+        <div className="space-y-1">
+          <Label className="text-xs font-display font-bold text-gray-600">Question Type</Label>
+          <select
+            value={q.type}
+            onChange={e => update({ type: e.target.value as import("./types").QuizQuestionType })}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-body"
+          >
+            <option value="multiple_choice">Multiple Choice</option>
+            <option value="true_false">True / False</option>
+            <option value="select_all">Select All That Apply</option>
+            <option value="fill_blank">Fill in the Blank</option>
+          </select>
+        </div>
+        {noAnswers && (
+          <p className="text-xs text-red-600 font-body bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            Assign a correct word to every blank before this question can be published.
+          </p>
+        )}
+        <SupportingMediaField url={q.imageUrl} onChange={(url) => update({ imageUrl: url || undefined })} />
+        <DragDropEditor
+          data={fillBlank}
+          onChange={(updated) => onUpdate({ ...data, fillBlank: updated } as BlockData)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 space-y-3">
@@ -674,12 +784,14 @@ function QuizQuestionEditor({ data, onUpdate }: { data: Record<string, unknown>;
             <option value="multiple_choice">Multiple Choice</option>
             <option value="true_false">True / False</option>
             <option value="select_all">Select All That Apply</option>
-            <option value="scenario">Scenario-Based</option>
-            <option value="hazard_recognition">Hazard Recognition</option>
-            <option value="ppe_selection">PPE Selection</option>
-            <option value="incident_scenario">Incident Scenario</option>
+            <option value="fill_blank">Fill in the Blank</option>
           </select>
         </div>
+      {q.correctIndices.length === 0 && (
+        <p className="text-xs text-red-600 font-body bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          Mark a correct answer before this question can be published.
+        </p>
+      )}
       <div className="space-y-1">
         <Label className="text-xs font-display font-bold text-gray-600">Question</Label>
         <Textarea
@@ -690,6 +802,7 @@ function QuizQuestionEditor({ data, onUpdate }: { data: Record<string, unknown>;
           rows={2}
         />
       </div>
+      <SupportingMediaField url={q.imageUrl} onChange={(url) => update({ imageUrl: url || undefined })} />
       {q.type === "true_false" ? (
         <div className="space-y-2">
           <Label className="text-xs font-display font-bold text-gray-600">Correct Answer</Label>
@@ -791,6 +904,77 @@ function QuizQuestionEditor({ data, onUpdate }: { data: Record<string, unknown>;
           <p className="text-[10px] text-gray-400 font-body">Cite the specific OSHA standard this question relates to.</p>
         </div>
       </details>
+    </div>
+  );
+}
+
+// ─── Supporting media (shared by assignment/checklist/quiz/signature) ─────────
+// Report §4: "Ensure assignments, checklists, quiz questions, and signature
+// instructions can include supporting text and media where relevant." Text
+// already exists on each of those blocks (instructions/title/question/prompt);
+// this adds the missing piece — an optional supporting image.
+
+function SupportingMediaField({
+  url, onChange, label = "Supporting Image (optional)",
+}: {
+  url: string | undefined;
+  onChange: (url: string) => void;
+  label?: string;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = useCallback(
+    async (file: File) => {
+      if (!file.type.startsWith("image/")) return;
+      setUploading(true);
+      try {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const result = await mockUploadFile({ base64, filename: file.name, mimeType: file.type, folder: "supporting-media" });
+        onChange(result.url);
+      } finally {
+        setUploading(false);
+      }
+    },
+    [onChange]
+  );
+
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-xs font-display font-bold text-gray-600">{label}</Label>
+      {url ? (
+        <div className="relative rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+          <img src={url} alt="" className="max-h-40 w-full object-contain" />
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="absolute top-1.5 right-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full p-1"
+            title="Remove image"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFile(f); e.target.value = ""; }} />
+          <Button type="button" variant="outline" size="sm" className="text-xs gap-1.5" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+            {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+            Upload
+          </Button>
+          <Input
+            placeholder="or paste an image URL…"
+            className="text-xs flex-1"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); const v = (e.target as HTMLInputElement).value.trim(); if (v) onChange(v); }
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

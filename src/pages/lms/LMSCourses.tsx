@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useRef, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import {
   Search, Plus, BookOpen, Award, ChevronRight,
   X, Filter, Upload, Image as ImageIcon,
@@ -421,6 +421,7 @@ function CourseCardSkeleton() {
 
 export default function LMSCourses() {
   const { role, setRole } = useLMS();
+  const [, navigate] = useLocation();
   const [search, setSearch] = useState<string>("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -485,8 +486,9 @@ export default function LMSCourses() {
         <CreateCourseModal
           onClose={() => setShowCreate(false)}
           onCreated={(course) => {
-            setCourses((prev) => [course, ...prev]);
+            // Route straight into the Course Builder — no detour back to this list.
             setShowCreate(false);
+            navigate(`/lms/builder/${course.id}`);
           }}
         />
       )}

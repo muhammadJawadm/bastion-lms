@@ -37,7 +37,7 @@ import {
   Shield, Trash2, Video, AlertTriangle, CheckSquare, Image,
   Paperclip, Globe, Lock, Archive, Eye, LayoutList, X,
   Type, FilePlus, Layout, CheckCircle2, Edit3,
-  Monitor, Smartphone, Search, MousePointerClick, ShieldAlert, ListChecks,
+  Monitor, Smartphone, Search,
   Undo2, Redo2, Copy,
 } from "lucide-react";
 
@@ -113,7 +113,12 @@ function StatusBadge({ status }: { status: string }) {
  * The seven block types the redesign brief calls out as most common —
  * shown first, unsectioned, before the grouped "More blocks" disclosure.
  */
-const MOST_USED_TYPES: BlockType[] = ["text", "image", "video", "pdf", "assignment", "checklist", "quiz_question", "signature"];
+// Exactly the seven approved content types per the Course Builder requirements report —
+// Image, Resource, Acknowledgment, Policy Acknowledgment, Warning, Safety Tip, and the
+// standalone Fill in the Blank / Drag & Drop blocks are no longer offered here (their
+// renderers/editors stay in the codebase for any existing content, they're just not
+// creatable as new blocks any more).
+const MOST_USED_TYPES: BlockType[] = ["text", "video", "pdf", "assignment", "checklist", "quiz_question", "signature"];
 
 /**
  * BlockPicker — full-screen overlay panel for adding a new content block.
@@ -126,13 +131,12 @@ function BlockPicker({ onAdd, onClose }: { onAdd: (type: BlockType) => void; onC
   const [search, setSearch] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
 
-  // Groups: canvas_slide and callout removed per Session 15.
-  const groups: { label: string; icon: React.ElementType; types: BlockType[] }[] = [
-    { label: "Content", icon: FileText, types: ["text", "video", "image", "pdf", "assignment", "resource"] },
-    { label: "Interactive", icon: MousePointerClick, types: ["checklist", "acknowledgment", "policy_ack", "signature"] },
-    { label: "Safety", icon: ShieldAlert, types: ["warning", "safety_tip"] },
-    { label: "Assessment", icon: ListChecks, types: ["quiz_question", "quiz_fitb", "quiz_dragdrop"] },
-  ];
+  // No "More blocks" groups any more — the picker now offers exactly the seven
+  // approved content types (all shown in "Most Used" below), per the Course
+  // Builder requirements report. Non-approved types (image, resource,
+  // acknowledgment, policy_ack, warning, safety_tip, quiz_fitb, quiz_dragdrop)
+  // keep their renderers/editors for existing content but are no longer offered.
+  const groups: { label: string; icon: React.ElementType; types: BlockType[] }[] = [];
 
   const q = search.trim().toLowerCase();
   const matches = (type: BlockType): boolean => {
@@ -470,13 +474,6 @@ function LessonSettingsPanel({
         <Label className="font-display font-bold text-[#0F1C2E] text-xs uppercase tracking-widest">Lesson Title</Label>
         <Input value={title} onChange={(e) => onTitleChange(e.target.value)} className="font-body text-sm" />
       </div>
-      <div className="space-y-1.5">
-        <Label className="font-display font-bold text-[#0F1C2E] text-xs uppercase tracking-widest">Type</Label>
-        <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200">
-          <LessonTypeIcon type={lesson.type as LessonType} size={14} />
-          <span className="text-sm font-body text-gray-700 capitalize">{lesson.type.replace("_", " ")}</span>
-        </div>
-      </div>
       <div className="flex items-center justify-between">
         <div>
           <p className="font-display font-bold text-[#0F1C2E] text-xs uppercase tracking-widest">Required</p>
@@ -499,17 +496,16 @@ function LessonSettingsPanel({
 // ─── Course settings panel ────────────────────────────────────────────────────
 
 function CourseSettingsPanel({
-  title, description, passScore, issuesCertificate, certificateTitle, duration, status, isDemo,
+  title, description, passScore, issuesCertificate, certificateTitle, duration, status,
   onTitleChange, onDescChange, onPassScoreChange, onIssuesCertChange, onCertificateTitleChange,
-  onDurationChange, onStatusChange, onIsDemoChange, onSave, isSaving, totalLessons, totalMinutes,
+  onDurationChange, onStatusChange, onSave, isSaving, totalLessons, totalMinutes,
 }: {
   title: string; description: string; passScore: number; issuesCertificate: boolean; certificateTitle: string;
-  duration: number; status: "draft" | "published" | "archived"; isDemo: boolean;
+  duration: number; status: "draft" | "published" | "archived";
   onTitleChange: (v: string) => void; onDescChange: (v: string) => void;
   onPassScoreChange: (v: number) => void; onIssuesCertChange: (v: boolean) => void;
   onCertificateTitleChange: (v: string) => void;
   onDurationChange: (v: number) => void; onStatusChange: (v: "draft" | "published" | "archived") => void;
-  onIsDemoChange: (v: boolean) => void;
   onSave: () => void; isSaving: boolean; totalLessons: number; totalMinutes: number;
 }) {
   return (
@@ -571,13 +567,6 @@ function CourseSettingsPanel({
           <p className="text-gray-400 text-[11px] font-body">What prints on the employee's certificate — can differ from the internal course title.</p>
         </div>
       )}
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="font-display font-bold text-[#0F1C2E] text-xs uppercase tracking-widest">Demo Course</p>
-          <p className="text-gray-400 text-xs font-body mt-0.5">Visible to trial accounts</p>
-        </div>
-        <Switch checked={isDemo} onCheckedChange={onIsDemoChange} />
-      </div>
       <Separator />
       <Button className="w-full bg-[#0047AB] hover:bg-[#1565C0] text-white font-display font-bold text-xs tracking-widest uppercase" onClick={onSave} disabled={isSaving}>
         {isSaving ? <Loader2 size={12} className="animate-spin mr-1" /> : <Save size={12} className="mr-1" />}
@@ -697,7 +686,6 @@ export default function LMSBuilder() {
   const [newModuleTitle, setNewModuleTitle] = useState("");
   const [showAddLesson, setShowAddLesson] = useState<{ moduleId: number | null } | null>(null);
   const [newLessonTitle, setNewLessonTitle] = useState("");
-  const [newLessonType, setNewLessonType] = useState<LessonType>("text");
 
   // ── UI state ──
   const [isSaving, setIsSaving] = useState(false);
@@ -1038,20 +1026,28 @@ export default function LMSBuilder() {
   };
 
   const createLesson = {
-    mutate: (input: { courseId: number; moduleId?: number; title: string; type: LessonType; sortOrder: number }) => {
+    // Lessons no longer ask for a content type up front — every new lesson is
+    // created as a plain "text" lesson and seeded with a single title block,
+    // never an auto-generated ending/"That's it" block.
+    mutate: (input: { courseId: number; moduleId?: number; title: string; sortOrder: number }) => {
       const created = addLesson({
         courseId: input.courseId,
         moduleId: input.moduleId ?? null,
         title: input.title,
-        type: input.type,
+        type: "text",
         sortOrder: input.sortOrder,
+      });
+      storeAddBlock({
+        lessonId: created.id,
+        type: "text",
+        data: { html: `<h1>${input.title}</h1>` },
+        sortOrder: 0,
       });
       setShowAddLesson(null);
       const newLesson: ActiveLesson = { ...created };
       setActiveLesson(newLesson);
       setExpandedLessons(prev => { const n = new Set(Array.from(prev)); n.add(created.id); return n; });
       setNewLessonTitle("");
-      setNewLessonType("text");
       toast.success("Lesson created");
     },
     isPending: false,
@@ -1435,12 +1431,6 @@ export default function LMSBuilder() {
               <BookOpen size={12} />Add Lesson
             </button>
             <button
-              onClick={() => setShowAddModule(true)}
-              className="w-full flex items-center justify-center gap-1.5 py-1.5 border border-gray-200 hover:border-[#0047AB] text-gray-500 hover:text-[#0047AB] rounded-lg text-xs font-body transition-colors"
-            >
-              <Plus size={12} />Add Module
-            </button>
-            <button
               onClick={() => { setActiveLesson(null); setRightPanel("course"); }}
               className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-gray-500 hover:text-[#0047AB] hover:bg-blue-50 text-xs font-body transition-colors"
             >
@@ -1733,12 +1723,10 @@ export default function LMSBuilder() {
               <CourseSettingsPanel
                 title={courseTitle} description={courseDesc} passScore={coursePassScore}
                 issuesCertificate={courseIssuesCert} certificateTitle={courseCertTitle} duration={courseDuration} status={courseStatus}
-                isDemo={courseIsDemo}
                 onTitleChange={setCourseTitle} onDescChange={setCourseDesc}
                 onPassScoreChange={setCoursePassScore} onIssuesCertChange={setCourseIssuesCert}
                 onCertificateTitleChange={setCourseCertTitle}
                 onDurationChange={setCourseDuration} onStatusChange={setCourseStatus}
-                onIsDemoChange={setCourseIsDemo}
                 onSave={handleSaveCourse} isSaving={isSaving}
                 totalLessons={totalLessons} totalMinutes={totalMinutes}
               />
@@ -1790,22 +1778,6 @@ export default function LMSBuilder() {
                 autoFocus
               />
             </div>
-            <div className="space-y-2">
-              <Label className="font-display font-bold text-[#0F1C2E] text-sm">Lesson Type</Label>
-              <Select value={newLessonType} onValueChange={(v) => setNewLessonType(v as LessonType)}>
-                <SelectTrigger className="font-body"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="text">Text / Rich Content</SelectItem>
-                  <SelectItem value="video_embed">Video Embed (YouTube/Vimeo)</SelectItem>
-                  <SelectItem value="video_upload">Video Upload</SelectItem>
-                  <SelectItem value="pdf">PDF Document</SelectItem>
-                  <SelectItem value="quiz">Quiz</SelectItem>
-                  <SelectItem value="image">Image</SelectItem>
-                  <SelectItem value="resource">Resource / Download</SelectItem>
-                  <SelectItem value="slides">Slide-Based Lesson</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddLesson(null)}>Cancel</Button>
@@ -1817,7 +1789,6 @@ export default function LMSBuilder() {
                     courseId,
                     moduleId: showAddLesson.moduleId ?? undefined,
                     title: newLessonTitle.trim(),
-                    type: newLessonType,
                     sortOrder: allLessons.filter((l) => l.moduleId === showAddLesson.moduleId).length,
                   });
                 }
@@ -1836,6 +1807,7 @@ export default function LMSBuilder() {
           courseName={course.title}
           lessonTitle={activeLesson?.title ?? "Course Preview"}
           blocks={blocks}
+          isDirty={isDirty}
           onClose={() => setShowPreview(false)}
         />
       )}

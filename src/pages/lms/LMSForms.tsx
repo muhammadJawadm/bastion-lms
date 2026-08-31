@@ -7,17 +7,17 @@
  */
 
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import {
   ClipboardCheck, Plus, Search, Loader2, MoreHorizontal, Pencil, Copy, Trash2,
-  Eye, FileText, Globe, Lock, User, Calendar, MessageSquare, Sparkles, X,
+  Eye, FileText, Globe, Lock, User, Calendar, MessageSquare,
 } from "lucide-react";
 import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
 import { toast } from "sonner";
 import {
   formsStore, addForm, patchForm, removeForm, getFormResponses, getResponseCount,
-  formResponsesStore, formTemplatesStore, addFormTemplate, removeFormTemplate,
-  type MockForm, type MockFormTemplate,
+  formResponsesStore, type MockForm,
 } from "./mockData";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -28,164 +28,64 @@ import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const STRUCTURE_LABELS: Record<MockForm["template"], string> = {
-  blank: "Blank",
-  incident_report: "Incident Report fields",
-  daily_checklist: "Daily Checklist fields",
-};
-
-/** Forms sub-navigation — brief calls for these five as sub-tabs, not new sidebar tabs. */
-type ViewTab = "all" | "draft" | "published" | "templates" | "responses";
+/** Forms sub-navigation. Templates were removed per the Course + Form Builder
+ * requirements report — every form starts blank in this phase. */
+type ViewTab = "all" | "draft" | "published" | "responses";
 
 const VIEW_TABS: { id: ViewTab; label: string }[] = [
   { id: "all", label: "All Forms" },
   { id: "draft", label: "Drafts" },
   { id: "published", label: "Published" },
-  { id: "templates", label: "Templates" },
   { id: "responses", label: "Responses" },
 ];
 
 // ─── Create Form Modal ────────────────────────────────────────────────────────
+// No "Start From" template picker — every form starts blank, per the report.
 
-function CreateFormModal({ templates, onClose, onCreated, initialTemplateId }: {
-  templates: MockFormTemplate[];
+function CreateFormModal({ onClose, onCreated }: {
   onClose: () => void;
   onCreated: (f: MockForm) => void;
-  initialTemplateId?: string;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [templateId, setTemplateId] = useState<string>(initialTemplateId ?? "blank");
   const [isPending, setIsPending] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) { toast.error("Form title is required"); return; }
-    const structure = templates.find((t) => t.id === templateId)?.structure ?? "blank";
     setIsPending(true);
     setTimeout(() => {
       setIsPending(false);
-      onCreated(addForm({ title: title.trim(), description: description.trim(), template: structure, ownerName: "Sarah Chen" }));
-      toast.success("Form created as a draft");
+      onCreated(addForm({ title: title.trim(), description: description.trim(), template: "blank", ownerName: "Sarah Chen" }));
     }, 400);
   };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-lg rounded-2xl p-0 gap-0 max-h-[90vh] flex flex-col">
-        <DialogHeader className="p-6 pb-4 border-b border-gray-100 text-left shrink-0">
-          <DialogTitle className="font-display font-bold text-[#0F1C2E] text-xl uppercase">New Form</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
-          <div className="p-6 space-y-4 overflow-y-auto flex-1 min-h-0">
-            <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Title *</Label>
-              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Incident Report" className="focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Description</Label>
-              <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="What is this form for?" className="resize-none focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Start From</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {templates.map((t) => (
-                  <button
-                    type="button"
-                    key={t.id}
-                    onClick={() => setTemplateId(t.id)}
-                    className={cn(
-                      "text-left p-3 rounded-xl border-2 transition-all",
-                      templateId === t.id ? "border-[#0047AB] bg-[#0047AB]/5" : "border-gray-100 hover:border-[#0047AB]/30"
-                    )}
-                  >
-                    <div className="font-display font-bold text-[#0F1C2E] text-xs uppercase flex items-center gap-1.5">
-                      {t.label}
-                      {t.isCustom && <Sparkles size={10} className="text-[#0047AB]" />}
-                    </div>
-                    <div className="text-[11px] text-gray-400 mt-0.5 leading-snug">{t.description}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-          <DialogFooter className="p-6 pt-4 border-t border-gray-100 shrink-0 sm:justify-stretch">
-            <Button type="button" variant="outline" onClick={onClose} className="flex-1 h-auto py-3 border-gray-200 text-gray-600 font-bold text-sm uppercase tracking-wide">
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isPending} className="flex-1 h-auto py-3 bg-[#0047AB] hover:bg-[#1E90FF] text-white font-bold text-sm uppercase tracking-wide gap-2">
-              {isPending ? <><Loader2 size={14} className="animate-spin" /> Creating...</> : "Create Form"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ─── Add Template Modal ───────────────────────────────────────────────────────
-
-function AddTemplateModal({ onClose, onCreated }: {
-  onClose: () => void;
-  onCreated: (t: MockFormTemplate) => void;
-}) {
-  const [label, setLabel] = useState("");
-  const [description, setDescription] = useState("");
-  const [structure, setStructure] = useState<MockForm["template"]>("blank");
-  const [isPending, setIsPending] = useState(false);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!label.trim()) { toast.error("Template name is required"); return; }
-    setIsPending(true);
-    setTimeout(() => {
-      setIsPending(false);
-      onCreated(addFormTemplate({ label: label.trim(), description: description.trim(), structure }));
-      toast.success("Template added");
-    }, 400);
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md rounded-2xl p-0 gap-0">
+      <DialogContent className="sm:max-w-lg rounded-2xl p-0 gap-0">
         <DialogHeader className="p-6 pb-4 border-b border-gray-100 text-left">
-          <DialogTitle className="font-display font-bold text-[#0F1C2E] text-xl uppercase">Add Template</DialogTitle>
+          <DialogTitle className="font-display font-bold text-[#0F1C2E] text-xl uppercase">New Form</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div className="space-y-1.5">
-            <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Template Name *</Label>
-            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Equipment Inspection" className="focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20" />
+            <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Title *</Label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Incident Report" className="focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20" autoFocus />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Description</Label>
-            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="What is this template for?" className="resize-none focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20" />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Field Layout</Label>
-            <Select value={structure} onValueChange={(v) => setStructure(v as MockForm["template"])}>
-              <SelectTrigger className="w-full focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="blank">Blank</SelectItem>
-                <SelectItem value="incident_report">Incident Report fields</SelectItem>
-                <SelectItem value="daily_checklist">Daily Checklist fields</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-[11px] text-gray-400">Forms created from this template will start with these fields.</p>
+            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="What is this form for?" className="resize-none focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20" />
           </div>
           <DialogFooter className="pt-2 sm:justify-stretch">
             <Button type="button" variant="outline" onClick={onClose} className="flex-1 h-auto py-3 border-gray-200 text-gray-600 font-bold text-sm uppercase tracking-wide">
               Cancel
             </Button>
             <Button type="submit" disabled={isPending} className="flex-1 h-auto py-3 bg-[#0047AB] hover:bg-[#1E90FF] text-white font-bold text-sm uppercase tracking-wide gap-2">
-              {isPending ? <><Loader2 size={14} className="animate-spin" /> Adding...</> : "Add Template"}
+              {isPending ? <><Loader2 size={14} className="animate-spin" /> Creating...</> : "Create Form"}
             </Button>
           </DialogFooter>
         </form>
@@ -312,24 +212,20 @@ function ResponsesModal({ form, onClose }: { form: MockForm; onClose: () => void
 
 export default function LMSForms() {
   const { role, setRole } = useLMS();
+  const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<ViewTab>("all");
   const [forms, setForms] = useState<MockForm[]>(formsStore);
-  const [templates, setTemplates] = useState<MockFormTemplate[]>(formTemplatesStore);
   const [showCreate, setShowCreate] = useState(false);
-  const [showAddTemplate, setShowAddTemplate] = useState(false);
-  const [prefillTemplateId, setPrefillTemplateId] = useState<string | undefined>(undefined);
   const [editingForm, setEditingForm] = useState<MockForm | null>(null);
   const [responsesForm, setResponsesForm] = useState<MockForm | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
 
   const refresh = () => setForms([...formsStore]);
-  const refreshTemplates = () => setTemplates([...formTemplatesStore]);
 
   const filtered = useMemo(() => {
-    if (activeTab === "templates" || activeTab === "responses") return [];
+    if (activeTab === "responses") return [];
     return forms.filter((f) => {
       const q = search.toLowerCase();
       const matchSearch = f.title.toLowerCase().includes(q) || f.description.toLowerCase().includes(q);
@@ -367,14 +263,6 @@ export default function LMSForms() {
     toast.success("Form deleted");
   }
 
-  function handleDeleteTemplate() {
-    if (deleteTemplateId == null) return;
-    removeFormTemplate(deleteTemplateId);
-    refreshTemplates();
-    setDeleteTemplateId(null);
-    toast.success("Template deleted");
-  }
-
   return (
     <LMSLayout
       title="Forms"
@@ -384,16 +272,12 @@ export default function LMSForms() {
     >
       {showCreate && (
         <CreateFormModal
-          templates={templates}
-          initialTemplateId={prefillTemplateId}
-          onClose={() => { setShowCreate(false); setPrefillTemplateId(undefined); }}
-          onCreated={() => { refresh(); setShowCreate(false); setPrefillTemplateId(undefined); setActiveTab("draft"); }}
-        />
-      )}
-      {showAddTemplate && (
-        <AddTemplateModal
-          onClose={() => setShowAddTemplate(false)}
-          onCreated={() => { refreshTemplates(); setShowAddTemplate(false); }}
+          onClose={() => setShowCreate(false)}
+          onCreated={(form) => {
+            // Route straight into the Form Builder — no detour back to this list.
+            setShowCreate(false);
+            navigate(`/lms/forms/builder/${form.id}`);
+          }}
         />
       )}
       {editingForm && <EditFormModal form={editingForm} onClose={() => setEditingForm(null)} onSaved={() => { refresh(); setEditingForm(null); }} />}
@@ -447,67 +331,13 @@ export default function LMSForms() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30 pointer-events-none" />
             <Input
               type="text"
-              placeholder={activeTab === "responses" ? "Search responses..." : activeTab === "templates" ? "Search templates..." : "Search forms..."}
+              placeholder={activeTab === "responses" ? "Search responses..." : "Search forms..."}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9 bg-white/5 border-white/10 text-white placeholder:text-white/30 focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
             />
           </div>
-          {activeTab === "templates" && (
-            <Button
-              onClick={() => setShowAddTemplate(true)}
-              variant="outline"
-              className="border-white/20 text-white/70 hover:text-white hover:bg-white/10 bg-transparent font-bold text-sm gap-2 h-auto py-2 px-4 shrink-0"
-            >
-              <Plus size={15} /> Add Template
-            </Button>
-          )}
         </div>
-
-        {/* Templates sub-tab */}
-        {activeTab === "templates" && (
-          templates.filter((t) => !search || t.label.toLowerCase().includes(search.toLowerCase())).length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {templates.filter((t) => !search || t.label.toLowerCase().includes(search.toLowerCase())).map((t) => (
-                <div key={t.id} className="bg-white rounded-xl border border-gray-100 p-4 flex flex-col gap-3 relative">
-                  {t.isCustom && (
-                    <button
-                      onClick={() => setDeleteTemplateId(t.id)}
-                      className="absolute top-3 right-3 text-gray-300 hover:text-red-500 transition-colors"
-                      title="Delete template"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  <div className="w-9 h-9 rounded-lg bg-[#0047AB]/10 flex items-center justify-center">
-                    <FileText className="w-4 h-4 text-[#0047AB]" />
-                  </div>
-                  <div>
-                    <div className="font-semibold text-gray-800 text-sm flex items-center gap-1.5 pr-4">
-                      {t.label}
-                      {t.isCustom && <Sparkles size={11} className="text-[#0047AB] shrink-0" />}
-                    </div>
-                    <div className="text-xs text-gray-400 mt-1 leading-relaxed">{t.description || STRUCTURE_LABELS[t.structure]}</div>
-                  </div>
-                  <Button
-                    onClick={() => { setPrefillTemplateId(t.id); setShowCreate(true); }}
-                    className="mt-auto bg-[#0047AB] hover:bg-[#1E90FF] text-white text-xs font-bold uppercase tracking-wide h-auto py-2"
-                  >
-                    Use Template
-                  </Button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <Empty className="bg-white rounded-xl border border-gray-100 py-20">
-              <EmptyHeader>
-                <EmptyMedia variant="icon" className="bg-gray-50 size-14"><FileText className="text-gray-300 size-7" /></EmptyMedia>
-                <EmptyTitle className="font-display uppercase text-gray-400 text-xl">No Templates Found</EmptyTitle>
-                <EmptyDescription>Try a different search term.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          )
-        )}
 
         {/* Responses sub-tab — aggregated across all forms */}
         {activeTab === "responses" && (
@@ -669,23 +499,6 @@ export default function LMSForms() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction className="bg-red-600 hover:bg-red-700 text-white" onClick={handleDelete}>
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog open={deleteTemplateId !== null} onOpenChange={(open) => !open && setDeleteTemplateId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Template?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This template will no longer be available when creating new forms. Forms already created from it are not affected.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction className="bg-red-600 hover:bg-red-700 text-white" onClick={handleDeleteTemplate}>
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>

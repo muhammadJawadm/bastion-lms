@@ -43,6 +43,7 @@ import LMSBilling from "./pages/lms/LMSBilling";
 import LMSCourseBuilder from "./pages/lms/LMSCourseBuilder";
 import LMSCourseLibrary from "./pages/lms/LMSCourseLibrary";
 import LMSForms from "./pages/lms/LMSForms";
+import LMSFormBuilder from "./pages/lms/LMSFormBuilder";
 
 function ScrollToTop() {
   const [location] = useLocation();
@@ -81,6 +82,7 @@ function Router() {
       <Route path="/lms/courses" component={LMSCourses} />
       <Route path="/lms/course-library" component={LMSCourseLibrary} />
       <Route path="/lms/forms" component={LMSForms} />
+      <Route path="/lms/forms/builder/:id" component={LMSFormBuilder} />
       <Route path="/lms/course-builder" component={LMSCourseBuilder} />
       <Route path="/lms/builder" component={LMSBuilder} />
       <Route path="/lms/builder/:courseId" component={LMSBuilder} />

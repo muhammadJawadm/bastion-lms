@@ -240,7 +240,7 @@ export default function LMSAbout() {
         />
 
         {/* Radial glow */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-[#0047AB]/20 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-200 h-100 bg-[#0047AB]/20 rounded-full blur-3xl pointer-events-none" />
 
         <div className="max-w-7xl mx-auto px-6 relative z-10">
           <div className="grid lg:grid-cols-2 gap-12 items-end">
@@ -315,7 +315,7 @@ export default function LMSAbout() {
                   </div>
                   {/* Certificate row */}
                   <div className="flex items-center gap-3 bg-white/5 rounded-lg p-3">
-                    <Award className="w-5 h-5 text-amber-400 flex-shrink-0" />
+                    <Award className="w-5 h-5 text-amber-400 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="text-white text-xs font-semibold">Certificate Ready</div>
                       <div className="text-white/40 text-xs">BLMS-2026-A8F2K1 · Expires 2029</div>
@@ -379,7 +379,7 @@ export default function LMSAbout() {
                 "I spent years as a Regional Safety Manager watching companies fail OSHA inspections not because they didn't train their workers — but because they couldn't <em>prove</em> it. Bastion LMS exists to close that gap."
               </p>
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-full bg-[#0047AB] flex items-center justify-center text-white font-display font-bold text-lg flex-shrink-0">B</div>
+                <div className="w-12 h-12 rounded-full bg-[#0047AB] flex items-center justify-center text-white font-display font-bold text-lg shrink-0">B</div>
                 <div>
                   <div className="font-bold text-[#0F1C2E]">Bastion Risk & Safety Group, LLC</div>
                   <div className="text-gray-500 text-sm">Marine Corps Veteran · OSHA Authorized Trainer · Maritime Safety Professional</div>
@@ -437,7 +437,7 @@ export default function LMSAbout() {
                 <div className="relative">
                   {/* Connector line */}
                   {i < HOW_IT_WORKS.length - 1 && (
-                    <div className="hidden lg:block absolute top-8 left-full w-full h-px bg-gradient-to-r from-[#0047AB]/30 to-transparent z-0" />
+                    <div className="hidden lg:block absolute top-8 left-full w-full h-px bg-linear-to-r from-[#0047AB]/30 to-transparent z-0" />
                   )}
                   <div className="relative z-10">
                     <div className="w-16 h-16 rounded-2xl bg-[#0047AB] flex items-center justify-center mb-4 shadow-lg shadow-[#0047AB]/20">
@@ -557,7 +557,7 @@ export default function LMSAbout() {
                   </div>
                   <p className="text-gray-600 text-sm leading-relaxed italic flex-1">"{t.quote}"</p>
                   <div className="flex items-center gap-3 mt-5 pt-5 border-t border-gray-100">
-                    <div className="w-10 h-10 rounded-full bg-[#0047AB] flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                    <div className="w-10 h-10 rounded-full bg-[#0047AB] flex items-center justify-center text-white font-bold text-sm shrink-0">
                       {t.initials}
                     </div>
                     <div>
@@ -605,7 +605,7 @@ export default function LMSAbout() {
                     "Mobile-friendly interface",
                   ].map((item) => (
                     <div key={item} className="flex items-center gap-2 text-sm text-gray-600">
-                      <CheckCircle2 className="w-4 h-4 text-[#0047AB] flex-shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-[#0047AB] shrink-0" />
                       {item}
                     </div>
                   ))}
@@ -637,7 +637,7 @@ export default function LMSAbout() {
                     "Analytics charts and CSV export",
                   ].map((item) => (
                     <div key={item} className="flex items-center gap-2 text-sm text-white/70">
-                      <CheckCircle2 className="w-4 h-4 text-[#1E90FF] flex-shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-[#1E90FF] shrink-0" />
                       {item}
                     </div>
                   ))}
@@ -665,7 +665,7 @@ export default function LMSAbout() {
       <section className="relative bg-[#0F1C2E] py-24 overflow-hidden">
         {/* Background glow */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="w-[600px] h-[300px] bg-[#0047AB]/20 rounded-full blur-3xl" />
+          <div className="w-150 h-75 bg-[#0047AB]/20 rounded-full blur-3xl" />
         </div>
         <div className="max-w-4xl mx-auto px-6 relative z-10">
           <Reveal className="text-center">

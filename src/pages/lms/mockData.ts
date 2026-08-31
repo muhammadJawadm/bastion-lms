@@ -16,6 +16,9 @@ export async function mockUploadFile(input: { base64: string; mimeType: string; 
   return { url: `data:${input.mimeType};base64,${input.base64}` };
 }
 
+import type { AnswerSet, MockFormDefinition } from "./formBuilder/types";
+import { DEFAULT_REPORT_LAYOUT } from "./formBuilder/types";
+
 export type MockRole = "platform-admin" | "client-admin" | "employee";
 
 export interface MockUser {
@@ -537,39 +540,10 @@ export interface MockFormResponse {
   answers: Record<string, string>;
 }
 
-export interface MockFormTemplate {
-  id: string;
-  label: string;
-  description: string;
-  /** Which of the three built-in field layouts this template's forms use. */
-  structure: MockForm["template"];
-  isCustom?: boolean;
-}
-
-export const MOCK_FORM_TEMPLATES: MockFormTemplate[] = [
-  { id: "blank", label: "Blank Form", description: "Start from scratch", structure: "blank" },
-  { id: "incident_report", label: "Incident Report", description: "Date, location, description, witnesses, corrective action", structure: "incident_report" },
-  { id: "daily_checklist", label: "Daily Safety Checklist", description: "Site, crew, PPE check, hazards observed, sign-off", structure: "daily_checklist" },
-];
-
-// Mutable so admins can add their own reusable starter templates alongside
-// the three built-ins — same shared-store pattern used elsewhere in this file.
-export let formTemplatesStore: MockFormTemplate[] = [...MOCK_FORM_TEMPLATES];
-let nextFormTemplateId = 1;
-export function addFormTemplate(input: { label: string; description: string; structure: MockForm["template"] }): MockFormTemplate {
-  const created: MockFormTemplate = {
-    id: `custom_${nextFormTemplateId++}`,
-    label: input.label,
-    description: input.description,
-    structure: input.structure,
-    isCustom: true,
-  };
-  formTemplatesStore = [...formTemplatesStore, created];
-  return created;
-}
-export function removeFormTemplate(id: string): void {
-  formTemplatesStore = formTemplatesStore.filter((t) => t.id !== id);
-}
+// Form templates ("Start From" choices) were removed per the Course + Form
+// Builder requirements report — every new form starts blank. `MockForm.template`
+// stays on the data model (defaulted to "blank" at creation) since the Form
+// Builder's own field/page model, below, is what actually defines a form now.
 
 export const MOCK_FORMS: MockForm[] = [
   { id: 1, title: "Incident Report", description: "Report a workplace injury, near-miss, or property damage incident.", status: "published", ownerName: "Sarah Chen", template: "incident_report", createdAt: daysAgo(40), updatedAt: daysAgo(2) },
@@ -621,4 +595,94 @@ export function getFormResponses(formId: number): MockFormResponse[] {
 }
 export function getResponseCount(formId: number): number {
   return formResponsesStore.filter((r) => r.formId === formId).length;
+}
+
+// ─── Form Builder: pages, fields, logic, reusable answer sets ────────────────
+// New data model backing the actual Form Builder (there was none before this
+// pass — Forms was just a title/description/status shell). See
+// `formBuilder/types.ts` for the shape definitions.
+
+const SEED_ANSWER_SETS: AnswerSet[] = [
+  { id: "good_fair_poor", label: "Good / Fair / Poor / N/A", options: ["Good", "Fair", "Poor", "N/A"] },
+  { id: "safe_at_risk", label: "Safe / At Risk / N/A", options: ["Safe", "At Risk", "N/A"] },
+  { id: "pass_fail", label: "Pass / Fail / N/A", options: ["Pass", "Fail", "N/A"] },
+  { id: "compliant_noncompliant", label: "Compliant / Non-Compliant / N/A", options: ["Compliant", "Non-Compliant", "N/A"] },
+];
+
+export let answerSetsStore: AnswerSet[] = [...SEED_ANSWER_SETS];
+let nextAnswerSetId = 1;
+export function addAnswerSet(input: { label: string; options: string[] }): AnswerSet {
+  const created: AnswerSet = { id: `answerset_${nextAnswerSetId++}`, label: input.label, options: input.options, isCustom: true };
+  answerSetsStore = [...answerSetsStore, created];
+  return created;
+}
+export function patchAnswerSet(id: string, patch: Partial<AnswerSet>): void {
+  answerSetsStore = answerSetsStore.map((a) => (a.id === id ? { ...a, ...patch } : a));
+}
+export function removeAnswerSet(id: string): void {
+  answerSetsStore = answerSetsStore.filter((a) => a.id !== id);
+}
+
+// One fleshed-out example definition (reusing the seeded "Incident Report"
+// form, id 1) so the Form Builder isn't empty on first load — it exercises a
+// section, a table, an instruction block, an answer-set-backed field with a
+// deficiency flag, and a logic rule.
+const SEED_FORM_DEFINITIONS: MockFormDefinition[] = [
+  {
+    formId: 1,
+    fields: {
+      f_date: { id: "f_date", type: "date", label: "Incident Date", required: true },
+      f_location: { id: "f_location", type: "short_text", label: "Location", required: true },
+      f_description: { id: "f_description", type: "long_text", label: "Description", required: true },
+      f_severity: { id: "f_severity", type: "dropdown", label: "Hazard Severity", required: true, answerSetId: "good_fair_poor", flagValues: ["Poor"] },
+      f_photo: { id: "f_photo", type: "photo", label: "Photo of Incident Site", required: false },
+      f_signature: { id: "f_signature", type: "signature", label: "Reporter Signature", required: true },
+      f_investigator: { id: "f_investigator", type: "person", label: "Assigned Investigator", required: false },
+    },
+    pages: [
+      {
+        id: "page_1",
+        title: "Incident Details",
+        items: [
+          { kind: "instruction", instruction: { id: "instr_1", body: "Complete this form within 24 hours of any workplace incident, near-miss, or property damage." } },
+          { kind: "section", section: { id: "sec_1", title: "What Happened", fieldIds: ["f_date", "f_location", "f_description"] } },
+          { kind: "section", section: { id: "sec_2", title: "Assessment", fieldIds: ["f_severity", "f_photo"] } },
+          { kind: "table", table: { id: "tbl_1", title: "Witnesses", columns: ["Name", "Role", "Statement"] } },
+        ],
+      },
+      {
+        id: "page_2",
+        title: "Sign-Off",
+        items: [
+          { kind: "section", section: { id: "sec_3", fieldIds: ["f_investigator", "f_signature"] } },
+        ],
+      },
+    ],
+    logic: [
+      { id: "rule_1", sourceFieldId: "f_severity", condition: { equals: "Poor" }, actions: [{ type: "flag" }, { type: "notify", role: "Safety Manager" }] },
+    ],
+    reportLayout: { ...DEFAULT_REPORT_LAYOUT },
+  },
+];
+
+export let formDefinitionsStore: MockFormDefinition[] = [...SEED_FORM_DEFINITIONS];
+
+/** Returns the form's definition, creating a blank one-page definition on first access. */
+export function getFormDefinition(formId: number): MockFormDefinition {
+  let def = formDefinitionsStore.find((d) => d.formId === formId);
+  if (!def) {
+    def = {
+      formId,
+      pages: [{ id: `page_${Date.now()}`, title: "Page 1", items: [] }],
+      fields: {},
+      logic: [],
+      reportLayout: { ...DEFAULT_REPORT_LAYOUT },
+    };
+    formDefinitionsStore = [...formDefinitionsStore, def];
+  }
+  return def;
+}
+export function patchFormDefinition(formId: number, patch: Partial<MockFormDefinition>): void {
+  const existing = getFormDefinition(formId);
+  formDefinitionsStore = formDefinitionsStore.map((d) => (d.formId === formId ? { ...existing, ...patch } : d));
 }

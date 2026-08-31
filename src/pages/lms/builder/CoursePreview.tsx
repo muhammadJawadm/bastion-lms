@@ -12,10 +12,12 @@ interface CoursePreviewProps {
   courseName: string;
   lessonTitle: string;
   blocks: DraftBlock[];
+  /** True when the lesson has unsaved edits — shows a "may not reflect the latest change" banner. */
+  isDirty?: boolean;
   onClose: () => void;
 }
 
-export function CoursePreview({ courseName, lessonTitle, blocks, onClose }: CoursePreviewProps) {
+export function CoursePreview({ courseName, lessonTitle, blocks, isDirty, onClose }: CoursePreviewProps) {
   const [device, setDevice] = useState<PreviewDevice>("desktop");
 
   const deviceFrames: { id: PreviewDevice; label: string; icon: React.ReactNode; width: string }[] = [
@@ -55,6 +57,13 @@ export function CoursePreview({ courseName, lessonTitle, blocks, onClose }: Cour
           </Button>
         </div>
       </div>
+
+      {isDirty && (
+        <div className="flex items-center justify-center gap-2 bg-amber-500/15 border-b border-amber-500/30 text-amber-300 text-xs font-body py-1.5">
+          <AlertTriangle size={13} />
+          This preview includes unsaved changes — it won't match the saved lesson until autosave finishes.
+        </div>
+      )}
 
       {/* Preview canvas */}
       <div className="flex-1 overflow-auto flex items-start justify-center p-8 bg-gray-100">
@@ -192,6 +201,9 @@ function PreviewBlock({ block, device }: { block: DraftBlock; device: PreviewDev
             <p className="text-sm font-body text-gray-700 whitespace-pre-wrap">
               {(data.instructions as string) || "Assignment instructions..."}
             </p>
+            {!!data.supportingMediaUrl && (
+              <img src={data.supportingMediaUrl as string} alt="" className="max-h-56 rounded-lg border border-sky-200" />
+            )}
             <div className="flex items-center justify-between text-xs font-body">
               <span className="text-sky-700 font-display font-bold uppercase tracking-wide">
                 {submissionType === "text" ? "Written response" : submissionType === "file" ? "File upload" : "Written response or file upload"}
@@ -241,6 +253,9 @@ function PreviewBlock({ block, device }: { block: DraftBlock; device: PreviewDev
             <span className="text-white font-display font-bold text-sm">{(data.title as string) || "Safety Checklist"}</span>
           </div>
           <div className="p-4 space-y-2 bg-teal-50">
+            {!!data.supportingMediaUrl && (
+              <img src={data.supportingMediaUrl as string} alt="" className="max-h-56 rounded-lg border border-teal-200 mb-1" />
+            )}
             {items.map((item, i) => (
               <label key={i} className="flex items-center gap-3 cursor-pointer">
                 <input type="checkbox" className="rounded accent-teal-600" />
@@ -286,6 +301,9 @@ function PreviewBlock({ block, device }: { block: DraftBlock; device: PreviewDev
       return (
         <div className="border border-pink-200 rounded-xl p-4 bg-pink-50 space-y-3">
           <p className="text-sm font-body text-pink-800">{(data.prompt as string) || "Please sign below."}</p>
+          {!!data.supportingMediaUrl && (
+            <img src={data.supportingMediaUrl as string} alt="" className="max-h-56 rounded-lg border border-pink-200" />
+          )}
           <div className="space-y-1">
             <label className="text-xs font-display font-bold text-pink-700">{(data.label as string) || "Full Name"}</label>
             <input
@@ -349,6 +367,21 @@ function PreviewBlock({ block, device }: { block: DraftBlock; device: PreviewDev
     case "quiz_question": {
       const q = (data.question as import("./types").QuizQuestion);
       if (!q) return null;
+      if (q.type === "fill_blank") {
+        const fillBlank = data.fillBlank as DragDropData;
+        if (!fillBlank) return null;
+        return (
+          <div className="border-2 border-[#0047AB] rounded-xl overflow-hidden">
+            <div className="bg-[#0047AB] px-4 py-3">
+              <span className="text-white font-display font-bold text-xs uppercase tracking-widest">Knowledge Check — Fill in the Blank</span>
+            </div>
+            <div className="p-4 bg-blue-50 space-y-3">
+              {!!q.imageUrl && <img src={q.imageUrl} alt="" className="max-h-56 rounded-lg border border-blue-200" />}
+              <DragDropViewer data={fillBlank} />
+            </div>
+          </div>
+        );
+      }
       return (
         <div className="border-2 border-[#0047AB] rounded-xl overflow-hidden">
           <div className="bg-[#0047AB] px-4 py-3">
@@ -356,6 +389,7 @@ function PreviewBlock({ block, device }: { block: DraftBlock; device: PreviewDev
           </div>
           <div className="p-4 space-y-3 bg-blue-50">
             <p className="font-display font-bold text-gray-800 text-sm">{q.question}</p>
+            {!!q.imageUrl && <img src={q.imageUrl} alt="" className="max-h-56 rounded-lg border border-blue-200" />}
             <div className="space-y-2">
               {q.type === "true_false" ? (
                 ["True", "False"].map((opt, i) => (
