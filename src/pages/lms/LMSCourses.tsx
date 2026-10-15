@@ -17,7 +17,7 @@
  *  - `LMSCourses`         — Main page component (default export).
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import {
   Search, Plus, BookOpen, Award, ChevronRight,
@@ -30,7 +30,7 @@ import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
 import { CourseSectionTabs } from "./components/CourseSectionTabs";
 import { toast } from "sonner";
-import { coursesStore, addCourse, patchCourse, type MockCourse } from "./mockData";
+import { getCourses, createCourse, updateCourseSettings, ApiError, type Course } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,14 +86,16 @@ const COVER_GRADIENTS: string[] = [
 
 /**
  * Returns a deterministic Tailwind gradient class string for a given course ID.
- * Uses modulo arithmetic so the gradient is stable across renders.
+ * Mongo ids aren't sequential, so this hashes the string instead of using `% length`.
  */
-function getCoverGradient(id: number): string {
-  return COVER_GRADIENTS[id % COVER_GRADIENTS.length];
+function getCoverGradient(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return COVER_GRADIENTS[hash % COVER_GRADIENTS.length];
 }
 
 /** Short relative-time label for course card metadata (e.g. "Updated 3d ago"). */
-function formatRelativeUpdated(date?: Date): string | null {
+function formatRelativeUpdated(date?: string | Date): string | null {
   if (!date) return null;
   const days = Math.round((Date.now() - new Date(date).getTime()) / 86400000);
   if (days <= 0) return "Updated today";
@@ -187,36 +189,43 @@ function CoverUploadZone({ value, onChange }: CoverUploadZoneProps) {
 // ─── Create Course Modal ─────────────────────────────────────────────────────
 
 interface CreateCourseModalProps {
+  companyId: string;
+  createdBy: string;
   onClose: () => void;
-  onCreated: (course: MockCourse) => void;
+  onCreated: (course: Course) => void;
 }
 
-function CreateCourseModal({ onClose, onCreated }: CreateCourseModalProps) {
+function CreateCourseModal({ companyId, createdBy, onClose, onCreated }: CreateCourseModalProps) {
   const [title, setTitle] = useState<string>("");
   const [description, setDescription] = useState<string>("");
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent): void => {
+  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     if (!title.trim()) { toast.error("Course title is required"); return; }
+    if (!companyId || !createdBy) { toast.error("Missing company/user context — try signing in again."); return; }
 
     setIsPending(true);
-    setTimeout(() => {
-      setIsPending(false);
-      onCreated(addCourse({
+    try {
+      const created = await createCourse({
         title: title.trim(),
+        coverImageUrl: coverPreview ?? undefined,
+      });
+      await updateCourseSettings({
+        courseId: created.data._id,
         description: description.trim(),
-        status: "draft",
         category: "construction",
         durationMinutes: 30,
         issuesCertificate: true,
-        coverImageUrl: coverPreview,
-        lessonCount: 0,
-        enrollmentCount: 0,
-      }));
+      });
       toast.success("Course created!");
-    }, 500);
+      onCreated({ ...created.data, description: description.trim(), category: "construction", durationMinutes: 30, issuesCertificate: true });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't create the course.");
+    } finally {
+      setIsPending(false);
+    }
   };
 
   return (
@@ -271,17 +280,17 @@ function CreateCourseModal({ onClose, onCreated }: CreateCourseModalProps) {
 // ─── Course Card ─────────────────────────────────────────────────────────────
 
 interface CourseCardCourse {
-  id: number;
+  _id: string;
   title: string;
   description?: string | null;
   status: string;
-  category: string;
+  category?: string;
   durationMinutes?: number | null;
   issuesCertificate?: boolean | null;
   coverImageUrl?: string | null;
   lessonCount?: number;
   enrollmentCount?: number;
-  updatedAt?: Date;
+  updatedAt?: string;
 }
 
 interface CourseCardProps {
@@ -292,12 +301,12 @@ interface CourseCardProps {
 }
 
 function CourseCard({ course, isAdmin, onDuplicate, onToggleArchive }: CourseCardProps) {
-  const gradient: string = getCoverGradient(course.id);
+  const gradient: string = getCoverGradient(course._id);
 
   return (
     <div className="relative group rounded-xl overflow-hidden bg-[#0F1C2E] border border-white/10 hover:border-white/20 transition-all hover:shadow-xl hover:shadow-black/30">
       {/* Cover */}
-      <Link href={isAdmin ? `/lms/builder/${course.id}` : `/lms/courses/${course.id}`}>
+      <Link href={isAdmin ? `/lms/builder/${course._id}` : `/lms/courses/${course._id}`}>
         <div className={cn("h-40 relative overflow-hidden bg-gradient-to-br", gradient)}>
           {course.coverImageUrl && (
             <img src={course.coverImageUrl} alt={course.title} className="w-full h-full object-cover" />
@@ -336,10 +345,10 @@ function CourseCard({ course, isAdmin, onDuplicate, onToggleArchive }: CourseCar
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[140px]">
                 <DropdownMenuItem asChild>
-                  <Link href={`/lms/builder/${course.id}`} className="gap-2 text-xs cursor-pointer"><Pencil size={12} /> Edit</Link>
+                  <Link href={`/lms/builder/${course._id}`} className="gap-2 text-xs cursor-pointer"><Pencil size={12} /> Edit</Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href={`/lms/assignments?courseId=${course.id}`} className="gap-2 text-xs cursor-pointer"><Users size={12} /> Assign</Link>
+                  <Link href={`/lms/assignments?courseId=${course._id}`} className="gap-2 text-xs cursor-pointer"><Users size={12} /> Assign</Link>
                 </DropdownMenuItem>
                 {onDuplicate && (
                   <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onDuplicate(); }} className="gap-2 text-xs cursor-pointer">
@@ -356,7 +365,7 @@ function CourseCard({ course, isAdmin, onDuplicate, onToggleArchive }: CourseCar
           )}
         </div>
 
-        <Link href={isAdmin ? `/lms/builder/${course.id}` : `/lms/courses/${course.id}`}>
+        <Link href={isAdmin ? `/lms/builder/${course._id}` : `/lms/courses/${course._id}`}>
           <h3 className="text-white font-semibold text-sm leading-snug mb-1 hover:text-[#1E90FF] transition-colors line-clamp-2 cursor-pointer">
             {course.title}
           </h3>
@@ -391,8 +400,8 @@ function CourseCard({ course, isAdmin, onDuplicate, onToggleArchive }: CourseCar
             </div>
           )}
           <div className="ml-auto">
-            <Badge className={cn("border-transparent text-[10px] font-bold uppercase tracking-wide", CATEGORY_COLORS[course.category] ?? "bg-white/10 text-white/60")}>
-              {CATEGORY_LABELS[course.category] ?? course.category}
+            <Badge className={cn("border-transparent text-[10px] font-bold uppercase tracking-wide", (course.category && CATEGORY_COLORS[course.category]) ?? "bg-white/10 text-white/60")}>
+              {(course.category && CATEGORY_LABELS[course.category]) ?? course.category ?? "Other"}
             </Badge>
           </div>
         </div>
@@ -420,7 +429,7 @@ function CourseCardSkeleton() {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function LMSCourses() {
-  const { role, setRole } = useLMS();
+  const { role, setRole, effectiveCompanyId, user } = useLMS();
   const [, navigate] = useLocation();
   const [search, setSearch] = useState<string>("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
@@ -428,14 +437,33 @@ export default function LMSCourses() {
   const [sortBy, setSortBy] = useState<"updated" | "title" | "status">("updated");
   const [showCreate, setShowCreate] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [courses, setCourses] = useState<MockCourse[]>(coursesStore);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  const refreshCourses = () => setCourses([...coursesStore]);
+  const loadCourses = useCallback(async () => {
+    if (!effectiveCompanyId) {
+      setCourses([]);
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const res = await getCourses();
+      setCourses(res.data);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't load courses.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [effectiveCompanyId]);
+
+  useEffect(() => {
+    loadCourses();
+  }, [loadCourses]);
 
   const isAdmin: boolean = role === "platform-admin" || role === "client-admin";
   // Employees/demo viewers only see published courses, same as the real app.
   const visibleCourses = isAdmin ? courses : courses.filter((c) => c.status === "published");
-  const isLoading = false;
 
   const filtered = visibleCourses
     .filter((c) => {
@@ -452,27 +480,37 @@ export default function LMSCourses() {
       return (b.updatedAt ? new Date(b.updatedAt).getTime() : 0) - (a.updatedAt ? new Date(a.updatedAt).getTime() : 0);
     });
 
-  function handleDuplicateCourse(course: MockCourse) {
-    addCourse({
-      title: `${course.title} (Copy)`,
-      description: course.description,
-      status: "draft",
-      category: course.category,
-      durationMinutes: course.durationMinutes,
-      issuesCertificate: course.issuesCertificate,
-      coverImageUrl: course.coverImageUrl,
-      lessonCount: course.lessonCount,
-      enrollmentCount: 0,
-    });
-    refreshCourses();
-    toast.success("Course duplicated as a draft");
+  async function handleDuplicateCourse(course: Course) {
+    if (!effectiveCompanyId || !user?.id) return;
+    try {
+      const created = await createCourse({
+        title: `${course.title} (Copy)`,
+        coverImageUrl: course.coverImageUrl ?? undefined,
+      });
+      await updateCourseSettings({
+        courseId: created.data._id,
+        description: course.description,
+        category: course.category,
+        durationMinutes: course.durationMinutes,
+        issuesCertificate: course.issuesCertificate,
+        status: "draft",
+      });
+      await loadCourses();
+      toast.success("Course duplicated as a draft");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't duplicate the course.");
+    }
   }
 
-  function handleToggleArchive(course: MockCourse) {
+  async function handleToggleArchive(course: Course) {
     const nextStatus = course.status === "archived" ? "draft" : "archived";
-    patchCourse(course.id, { status: nextStatus });
-    refreshCourses();
-    toast.success(nextStatus === "archived" ? "Course archived" : "Course restored to draft");
+    try {
+      await updateCourseSettings({ courseId: course._id, status: nextStatus });
+      await loadCourses();
+      toast.success(nextStatus === "archived" ? "Course archived" : "Course restored to draft");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't update the course.");
+    }
   }
 
   return (
@@ -484,11 +522,13 @@ export default function LMSCourses() {
     >
       {showCreate && (
         <CreateCourseModal
+          companyId={effectiveCompanyId ?? ""}
+          createdBy={user?.id ?? ""}
           onClose={() => setShowCreate(false)}
           onCreated={(course) => {
             // Route straight into the Course Builder — no detour back to this list.
             setShowCreate(false);
-            navigate(`/lms/builder/${course.id}`);
+            navigate(`/lms/builder/${course._id}`);
           }}
         />
       )}
@@ -596,7 +636,7 @@ export default function LMSCourses() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {filtered.map((course) => (
                 <CourseCard
-                  key={course.id}
+                  key={course._id}
                   course={course}
                   isAdmin={isAdmin}
                   onDuplicate={isAdmin ? () => handleDuplicateCourse(course) : undefined}
@@ -607,9 +647,9 @@ export default function LMSCourses() {
           ) : (
             <div className="space-y-2">
               {filtered.map((course) => (
-                <Link key={course.id} href={isAdmin ? `/lms/builder/${course.id}` : `/lms/courses/${course.id}`}>
+                <Link key={course._id} href={isAdmin ? `/lms/builder/${course._id}` : `/lms/courses/${course._id}`}>
                   <div className="flex items-center gap-4 bg-[#0F1C2E] border border-white/10 hover:border-white/20 rounded-xl p-4 cursor-pointer transition-all group">
-                    <div className={cn("w-16 h-12 rounded-lg flex-shrink-0 overflow-hidden bg-gradient-to-br", getCoverGradient(course.id))}>
+                    <div className={cn("w-16 h-12 rounded-lg flex-shrink-0 overflow-hidden bg-gradient-to-br", getCoverGradient(course._id))}>
                       {course.coverImageUrl && (
                         <img src={course.coverImageUrl} alt={course.title} className="w-full h-full object-cover" />
                       )}
@@ -621,8 +661,8 @@ export default function LMSCourses() {
                       )}
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">
-                      <Badge className={cn("border-transparent text-[10px] font-bold uppercase tracking-wide", CATEGORY_COLORS[course.category] ?? "bg-white/10 text-white/60")}>
-                        {CATEGORY_LABELS[course.category] ?? course.category}
+                      <Badge className={cn("border-transparent text-[10px] font-bold uppercase tracking-wide", (course.category && CATEGORY_COLORS[course.category]) ?? "bg-white/10 text-white/60")}>
+                        {(course.category && CATEGORY_LABELS[course.category]) ?? course.category ?? "Other"}
                       </Badge>
                       {isAdmin && (
                         <Badge className={cn(

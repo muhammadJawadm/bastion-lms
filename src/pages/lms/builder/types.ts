@@ -317,13 +317,13 @@ export interface QuizWordsData {
 export interface TextBlockData { html: string; }
 
 /** Data payload for a `video` block. */
-export interface VideoBlockData { url: string; caption?: string; autoplay?: boolean; }
+export interface VideoBlockData { url: string; caption?: string; autoplay?: boolean; /** The Cloudinary upload's backend id, if uploaded (vs. embedded by URL) — lets a later replace clean up the old file. */ uploadId?: string; }
 
 /** Data payload for an `image` block. */
-export interface ImageBlockData { url: string; alt?: string; caption?: string; width?: "full" | "half" | "quarter"; }
+export interface ImageBlockData { url: string; alt?: string; caption?: string; width?: "full" | "half" | "quarter"; uploadId?: string; }
 
 /** Data payload for a `pdf` block. */
-export interface PdfBlockData { url: string; title?: string; downloadable?: boolean; }
+export interface PdfBlockData { url: string; title?: string; downloadable?: boolean; uploadId?: string; }
 
 /** Data payload for a `resource` block (downloadable file). */
 export interface ResourceBlockData { url: string; title: string; description?: string; fileType?: string; }
@@ -433,12 +433,12 @@ export interface ContentBlock {
  * matching the database primary key.
  */
 export interface DraftBlock {
-  /** Temporary UUID for new blocks; numeric string for saved blocks. */
+  /** Temporary UUID for new blocks; the Mongo _id string for saved blocks. */
   id: string;
   /** Database primary key (only set for saved blocks). */
-  dbId?: number;
+  dbId?: string;
   /** The lesson this block belongs to. */
-  lessonId: number;
+  lessonId: string;
   /** Block type discriminant. */
   type: BlockType;
   /** Block data payload. */

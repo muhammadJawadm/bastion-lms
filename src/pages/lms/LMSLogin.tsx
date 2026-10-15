@@ -1,8 +1,19 @@
 /**
- * LMSLogin — Bastion LMS (UI Prototype)
- * No real authentication — any credentials submitted here just land on the
- * dashboard. This screen exists to show the sign-in experience, not to
- * validate against a real account store.
+ * LMSLogin — Bastion LMS
+ *
+ * Real authentication against the backend in
+ * `Bastion-LMS.postman_collection.json` (via `src/lib/api.ts`):
+ *  - Sign In: POST /users/login. A 403 here means the account was never
+ *    OTP-verified — this app offers to pick that verification back up
+ *    rather than dead-ending.
+ *  - Create Account: POST /users/register creates the Company + its first
+ *    client_admin together and returns NO token (OTP-gated) — this page
+ *    always follows it with an inline "enter the code" step, then chains
+ *    into POST /users/login once verified so the admin lands signed in
+ *    without re-typing their password.
+ *  - Forgot Password: the real 3-step reset flow (request → verify OTP →
+ *    set new password). Replaces the old "Magic Link" tab — the backend
+ *    has no magic-link endpoint, so that tab was UI with nothing behind it.
  */
 
 import { useState } from "react";
@@ -15,13 +26,13 @@ import {
   EyeOff,
   ArrowRight,
   Loader2,
-  CheckCircle2,
   AlertCircle,
-  Link2,
-  CheckCircle,
+  KeyRound,
   UserPlus,
   User,
-  Copy,
+  Building2,
+  ShieldCheck,
+  CheckCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -29,9 +40,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { useLMS } from "./LMSContext";
+import {
+  loginUser, registerCompanyAdmin, verifyOtp, resendOtp,
+  forgotPassword, verifyResetOtp, resetPassword, ApiError,
+} from "@/lib/api";
 
 /** Available tabs on the login page. */
-type LoginTab = "password" | "magic" | "register";
+type LoginTab = "password" | "forgot" | "register";
+/** Register tab has two steps: fill the form, then confirm the emailed code. */
+type RegisterStep = "form" | "verify";
+/** Forgot-password tab walks through the real 3-step reset flow. */
+type ForgotStep = "request" | "verify" | "reset";
 
 function FieldError({ message }: { message?: string | null }) {
   if (!message) return null;
@@ -47,79 +67,66 @@ const inputWrapper = "relative";
 const inputIconClass = "absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none";
 const inputFieldClass = "h-auto pl-10 pr-4 py-3 rounded-xl border-gray-200 text-gray-900 placeholder:text-gray-400 focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/10";
 
+function apiErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) return err.message;
+  return fallback;
+}
+
 export default function LMSLogin() {
   const [, navigate] = useLocation();
+  const { login } = useLMS();
   const [tab, setTab] = useState<LoginTab>("password");
 
-  // ── Password form state ──────────────────────────────────────────────────────
+  // ── Sign In ──────────────────────────────────────────────────────────────
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [loginPending, setLoginPending] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
-  // ── Magic link form state ────────────────────────────────────────────────────
-  const [magicEmail, setMagicEmail] = useState("");
-  const [magicSent, setMagicSent] = useState(false);
-  const [magicUrl, setMagicUrl] = useState<string | null>(null);
+  const handlePasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) return;
+    setLoginError(null);
+    setLoginPending(true);
+    try {
+      const res = await loginUser({ email, password });
+      if (!res.token) throw new ApiError(500, "Sign-in succeeded but no session token was returned.", res);
+      login(res.token, res.data);
+      toast.success(`Welcome back, ${res.data.name?.split(" ")[0] ?? ""}`);
+      navigate("/lms/dashboard");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        // Unverified account — pick the OTP step back up instead of dead-ending.
+        setRegEmail(email);
+        setRegPassword(password);
+        setRegisterStep("verify");
+        setTab("register");
+        toast.info("That account hasn't been verified yet — enter the code we emailed you.");
+      } else {
+        setLoginError(apiErrorMessage(err, "Couldn't sign in. Check your email and password."));
+      }
+    } finally {
+      setLoginPending(false);
+    }
+  };
 
-  // ── Registration form state ─────────────────────────────────────────────────
+  // ── Create Account ───────────────────────────────────────────────────────
+  const [registerStep, setRegisterStep] = useState<RegisterStep>("form");
   const [regName, setRegName] = useState("");
+  const [regCompany, setRegCompany] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
   const [regConfirm, setRegConfirm] = useState("");
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [showRegConfirm, setShowRegConfirm] = useState(false);
-
-  // ── Mock mutations — UI prototype only, no network calls ─────────────────────
-  const [loginPending, setLoginPending] = useState(false);
-  const loginMutation = {
-    isPending: loginPending,
-    error: null as { message: string } | null,
-    mutate: (_input: { email: string; password: string }) => {
-      setLoginPending(true);
-      setTimeout(() => {
-        setLoginPending(false);
-        toast.success("Signed in successfully");
-        navigate("/lms/dashboard");
-      }, 500);
-    },
-  };
-
-  const [magicPending, setMagicPending] = useState(false);
-  const magicLinkMutation = {
-    isPending: magicPending,
-    error: null as { message: string } | null,
-    mutate: (_input: { email: string; origin: string }) => {
-      setMagicPending(true);
-      setTimeout(() => {
-        setMagicPending(false);
-        setMagicSent(true);
-        setMagicUrl(`${window.location.origin}/lms/magic?token=demo-preview-token`);
-      }, 500);
-    },
-  };
-
-  const handlePasswordLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email || !password) return;
-    loginMutation.mutate({ email, password });
-  };
-
-  /** Register — UI prototype only, just signs the user in and lands on the dashboard. */
   const [registerPending, setRegisterPending] = useState(false);
-  const registerMutation = {
-    isPending: registerPending,
-    error: null as { message: string } | null,
-    mutate: (_input: { name: string; email: string; password: string; lmsRole: string }) => {
-      setRegisterPending(true);
-      setTimeout(() => {
-        setRegisterPending(false);
-        toast.success("Account created! Welcome to Bastion LMS.");
-        navigate("/lms/dashboard");
-      }, 500);
-    },
-  };
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [regOtp, setRegOtp] = useState("");
+  const [verifyPending, setVerifyPending] = useState(false);
+  const [resendPending, setResendPending] = useState(false);
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (regPassword !== regConfirm) {
       toast.error("Passwords do not match.");
@@ -129,18 +136,116 @@ export default function LMSLogin() {
       toast.error("Password must be at least 8 characters.");
       return;
     }
-    registerMutation.mutate({
-      name: regName,
-      email: regEmail,
-      password: regPassword,
-      lmsRole: "demo",
-    });
+    setRegisterError(null);
+    setRegisterPending(true);
+    try {
+      await registerCompanyAdmin({ name: regName, email: regEmail, password: regPassword, companyName: regCompany });
+      toast.success("Account created — check your email for a verification code.");
+      setRegisterStep("verify");
+    } catch (err) {
+      setRegisterError(apiErrorMessage(err, "Couldn't create that account."));
+    } finally {
+      setRegisterPending(false);
+    }
   };
 
-  const handleMagicLink = (e: React.FormEvent) => {
+  const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!magicEmail) return;
-    magicLinkMutation.mutate({ email: magicEmail, origin: window.location.origin });
+    if (!regOtp.trim()) return;
+    setRegisterError(null);
+    setVerifyPending(true);
+    try {
+      await verifyOtp({ email: regEmail, otp: regOtp.trim() });
+      // Verification doesn't itself sign you in — follow with a real login,
+      // same two calls the collection's own run order makes (1.3 then 1.4).
+      const res = await loginUser({ email: regEmail, password: regPassword });
+      if (!res.token) throw new ApiError(500, "Verified, but signing in automatically failed — sign in manually.", res);
+      login(res.token, res.data);
+      toast.success("Email verified — welcome to Bastion LMS.");
+      navigate("/lms/dashboard");
+    } catch (err) {
+      setRegisterError(apiErrorMessage(err, "That code didn't work — double check it and try again."));
+    } finally {
+      setVerifyPending(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    setResendPending(true);
+    try {
+      await resendOtp({ email: regEmail });
+      toast.success("New code sent.");
+    } catch (err) {
+      toast.error(apiErrorMessage(err, "Couldn't resend the code."));
+    } finally {
+      setResendPending(false);
+    }
+  };
+
+  // ── Forgot Password ──────────────────────────────────────────────────────
+  const [forgotStep, setForgotStep] = useState<ForgotStep>("request");
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotOtp, setForgotOtp] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [forgotPending, setForgotPending] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+
+  const handleForgotRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail) return;
+    setForgotError(null);
+    setForgotPending(true);
+    try {
+      await forgotPassword({ email: forgotEmail });
+      toast.success("Check your email for a reset code.");
+      setForgotStep("verify");
+    } catch (err) {
+      setForgotError(apiErrorMessage(err, "Couldn't start the reset — check the email address."));
+    } finally {
+      setForgotPending(false);
+    }
+  };
+
+  const handleForgotVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotOtp.trim()) return;
+    setForgotError(null);
+    setForgotPending(true);
+    try {
+      await verifyResetOtp({ email: forgotEmail, otp: forgotOtp.trim() });
+      setForgotStep("reset");
+    } catch (err) {
+      setForgotError(apiErrorMessage(err, "That code didn't work — double check it and try again."));
+    } finally {
+      setForgotPending(false);
+    }
+  };
+
+  const handleForgotReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== newPasswordConfirm) {
+      toast.error("Passwords do not match.");
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error("Password must be at least 8 characters.");
+      return;
+    }
+    setForgotError(null);
+    setForgotPending(true);
+    try {
+      await resetPassword({ email: forgotEmail, password: newPassword, confirmPassword: newPasswordConfirm });
+      toast.success("Password updated — sign in with your new password.");
+      setEmail(forgotEmail);
+      setTab("password");
+      setForgotStep("request");
+      setForgotEmail(""); setForgotOtp(""); setNewPassword(""); setNewPasswordConfirm("");
+    } catch (err) {
+      setForgotError(apiErrorMessage(err, "Couldn't reset the password."));
+    } finally {
+      setForgotPending(false);
+    }
   };
 
   return (
@@ -215,7 +320,10 @@ export default function LMSLogin() {
           <h1 className="font-display font-extrabold text-[#0F1C2E] text-4xl uppercase mb-2">Welcome Back</h1>
           <p className="text-gray-500 text-sm mb-8">Sign in to access your Bastion LMS account.</p>
 
-          <Tabs value={tab} onValueChange={(v) => setTab(v as LoginTab)}>
+          <Tabs
+            value={tab}
+            onValueChange={(v) => setTab(v as LoginTab)}
+          >
             <TabsList className="w-full h-auto bg-gray-100 p-1 rounded-xl mb-6">
               <TabsTrigger
                 value="password"
@@ -224,10 +332,10 @@ export default function LMSLogin() {
                 <Lock className="w-3.5 h-3.5" /> Sign In
               </TabsTrigger>
               <TabsTrigger
-                value="magic"
+                value="forgot"
                 className="flex-1 gap-1.5 py-2 rounded-lg text-xs font-semibold data-[state=active]:bg-[#0047AB] data-[state=active]:text-white data-[state=active]:shadow-sm text-gray-500"
               >
-                <Link2 className="w-3.5 h-3.5" /> Magic Link
+                <KeyRound className="w-3.5 h-3.5" /> Forgot Password
               </TabsTrigger>
               <TabsTrigger
                 value="register"
@@ -237,7 +345,7 @@ export default function LMSLogin() {
               </TabsTrigger>
             </TabsList>
 
-            {/* ── Password Tab ── */}
+            {/* ── Sign In Tab ── */}
             <TabsContent value="password" className="mt-0">
               <form onSubmit={handlePasswordLogin} className="space-y-4">
                 <div className="space-y-1.5">
@@ -283,14 +391,14 @@ export default function LMSLogin() {
                   </div>
                 </div>
 
-                <FieldError message={loginMutation.error?.message} />
+                <FieldError message={loginError} />
 
                 <Button
                   type="submit"
-                  disabled={loginMutation.isPending || !email || !password}
+                  disabled={loginPending || !email || !password}
                   className="w-full h-auto gap-2 bg-[#0047AB] hover:bg-[#1565C0] text-white font-bold text-sm uppercase tracking-wider py-3.5 rounded-xl mt-2"
                 >
-                  {loginMutation.isPending ? (
+                  {loginPending ? (
                     <><Loader2 className="w-4 h-4 animate-spin" /> Signing In...</>
                   ) : (
                     <>Sign In <ArrowRight className="w-4 h-4" /></>
@@ -300,33 +408,198 @@ export default function LMSLogin() {
                 <div className="text-center">
                   <button
                     type="button"
-                    onClick={() => setTab("magic")}
+                    onClick={() => setTab("forgot")}
                     className="text-gray-400 hover:text-[#0047AB] text-xs transition-colors"
                   >
-                    Forgot your password? Use a magic link instead →
+                    Forgot your password? →
                   </button>
                 </div>
               </form>
             </TabsContent>
 
-            {/* ── Magic Link Tab ── */}
-            <TabsContent value="magic" className="mt-0">
-              {!magicSent ? (
-                <form onSubmit={handleMagicLink} className="space-y-4">
+            {/* ── Forgot Password Tab ── */}
+            <TabsContent value="forgot" className="mt-0">
+              {forgotStep === "request" && (
+                <form onSubmit={handleForgotRequest} className="space-y-4">
                   <p className="text-gray-500 text-sm leading-relaxed">
-                    Enter your email address and we'll generate a one-time login link valid for 15 minutes. No password required.
+                    Enter your account email and we'll send you a reset code.
                   </p>
                   <div className="space-y-1.5">
-                    <Label htmlFor="magic-email" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                    <Label htmlFor="forgot-email" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
                       Email Address
                     </Label>
                     <div className={inputWrapper}>
                       <Mail className={inputIconClass} />
                       <Input
-                        id="magic-email"
+                        id="forgot-email"
                         type="email"
-                        value={magicEmail}
-                        onChange={(e) => setMagicEmail(e.target.value)}
+                        value={forgotEmail}
+                        onChange={(e) => setForgotEmail(e.target.value)}
+                        placeholder="you@company.com"
+                        required
+                        className={inputFieldClass}
+                      />
+                    </div>
+                  </div>
+                  <FieldError message={forgotError} />
+                  <Button
+                    type="submit"
+                    disabled={forgotPending || !forgotEmail}
+                    className="w-full h-auto gap-2 bg-[#0047AB] hover:bg-[#1565C0] text-white font-bold text-sm uppercase tracking-wider py-3.5 rounded-xl"
+                  >
+                    {forgotPending ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Sending Code...</>
+                    ) : (
+                      <>Send Reset Code <ArrowRight className="w-4 h-4" /></>
+                    )}
+                  </Button>
+                </form>
+              )}
+
+              {forgotStep === "verify" && (
+                <form onSubmit={handleForgotVerify} className="space-y-4">
+                  <p className="text-gray-500 text-sm leading-relaxed">
+                    Enter the code we sent to <strong className="text-gray-800">{forgotEmail}</strong>.
+                  </p>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="forgot-otp" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                      Reset Code
+                    </Label>
+                    <div className={inputWrapper}>
+                      <ShieldCheck className={inputIconClass} />
+                      <Input
+                        id="forgot-otp"
+                        value={forgotOtp}
+                        onChange={(e) => setForgotOtp(e.target.value)}
+                        placeholder="123456"
+                        required
+                        className={cn(inputFieldClass, "tracking-[0.3em] font-mono")}
+                      />
+                    </div>
+                  </div>
+                  <FieldError message={forgotError} />
+                  <Button
+                    type="submit"
+                    disabled={forgotPending || !forgotOtp}
+                    className="w-full h-auto gap-2 bg-[#0047AB] hover:bg-[#1565C0] text-white font-bold text-sm uppercase tracking-wider py-3.5 rounded-xl"
+                  >
+                    {forgotPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Verifying...</> : "Verify Code"}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setForgotStep("request")}
+                    className="w-full text-gray-400 hover:text-[#0047AB] text-xs transition-colors py-1"
+                  >
+                    ← Use a different email
+                  </button>
+                </form>
+              )}
+
+              {forgotStep === "reset" && (
+                <form onSubmit={handleForgotReset} className="space-y-4">
+                  <p className="text-gray-500 text-sm leading-relaxed">Choose a new password for your account.</p>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="new-password" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                      New Password <span className="text-gray-400 normal-case font-normal">(min. 8 characters)</span>
+                    </Label>
+                    <div className={inputWrapper}>
+                      <Lock className={inputIconClass} />
+                      <Input
+                        id="new-password"
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="••••••••"
+                        required
+                        minLength={8}
+                        className={inputFieldClass}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="new-password-confirm" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                      Confirm New Password
+                    </Label>
+                    <div className={inputWrapper}>
+                      <Lock className={inputIconClass} />
+                      <Input
+                        id="new-password-confirm"
+                        type="password"
+                        value={newPasswordConfirm}
+                        onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                        placeholder="••••••••"
+                        required
+                        className={inputFieldClass}
+                      />
+                    </div>
+                  </div>
+                  <FieldError message={forgotError} />
+                  <Button
+                    type="submit"
+                    disabled={forgotPending || !newPassword || !newPasswordConfirm}
+                    className="w-full h-auto gap-2 bg-[#0047AB] hover:bg-[#1565C0] text-white font-bold text-sm uppercase tracking-wider py-3.5 rounded-xl"
+                  >
+                    {forgotPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Updating...</> : "Set New Password"}
+                  </Button>
+                </form>
+              )}
+            </TabsContent>
+
+            {/* ── Create Account Tab ── */}
+            <TabsContent value="register" className="mt-0">
+              {registerStep === "form" ? (
+                <form onSubmit={handleRegister} className="space-y-4">
+                  <p className="text-gray-500 text-sm leading-relaxed">
+                    Set up your company's Bastion LMS account. You'll be the first Company Admin.
+                  </p>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reg-company" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                      Company Name
+                    </Label>
+                    <div className={inputWrapper}>
+                      <Building2 className={inputIconClass} />
+                      <Input
+                        id="reg-company"
+                        type="text"
+                        value={regCompany}
+                        onChange={(e) => setRegCompany(e.target.value)}
+                        placeholder="Pacific Coast Contractors"
+                        required
+                        className={inputFieldClass}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reg-name" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                      Full Name
+                    </Label>
+                    <div className={inputWrapper}>
+                      <User className={inputIconClass} />
+                      <Input
+                        id="reg-name"
+                        type="text"
+                        value={regName}
+                        onChange={(e) => setRegName(e.target.value)}
+                        placeholder="Jane Smith"
+                        required
+                        className={inputFieldClass}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reg-email" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                      Email Address
+                    </Label>
+                    <div className={inputWrapper}>
+                      <Mail className={inputIconClass} />
+                      <Input
+                        id="reg-email"
+                        type="email"
+                        value={regEmail}
+                        onChange={(e) => setRegEmail(e.target.value)}
                         placeholder="you@company.com"
                         required
                         className={inputFieldClass}
@@ -334,180 +607,138 @@ export default function LMSLogin() {
                     </div>
                   </div>
 
-                  <FieldError message={magicLinkMutation.error?.message} />
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reg-password" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                      Password <span className="text-gray-400 normal-case font-normal">(min. 8 characters)</span>
+                    </Label>
+                    <div className={inputWrapper}>
+                      <Lock className={inputIconClass} />
+                      <Input
+                        id="reg-password"
+                        type={showRegPassword ? "text" : "password"}
+                        value={regPassword}
+                        onChange={(e) => setRegPassword(e.target.value)}
+                        placeholder="••••••••"
+                        required
+                        minLength={8}
+                        className={cn(inputFieldClass, "pr-12")}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowRegPassword(!showRegPassword)}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        {showRegPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reg-confirm" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                      Confirm Password
+                    </Label>
+                    <div className={inputWrapper}>
+                      <Lock className={inputIconClass} />
+                      <Input
+                        id="reg-confirm"
+                        type={showRegConfirm ? "text" : "password"}
+                        value={regConfirm}
+                        onChange={(e) => setRegConfirm(e.target.value)}
+                        placeholder="••••••••"
+                        required
+                        className={cn(inputFieldClass, "pr-12")}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowRegConfirm(!showRegConfirm)}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        {showRegConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <FieldError message={registerError} />
 
                   <Button
                     type="submit"
-                    disabled={magicLinkMutation.isPending || !magicEmail}
-                    className="w-full h-auto gap-2 bg-[#0047AB] hover:bg-[#1565C0] text-white font-bold text-sm uppercase tracking-wider py-3.5 rounded-xl"
+                    disabled={registerPending || !regName || !regCompany || !regEmail || !regPassword || !regConfirm}
+                    className="w-full h-auto gap-2 bg-[#0047AB] hover:bg-[#1565C0] text-white font-bold text-sm uppercase tracking-wider py-3.5 rounded-xl mt-2"
                   >
-                    {magicLinkMutation.isPending ? (
-                      <><Loader2 className="w-4 h-4 animate-spin" /> Generating Link...</>
+                    {registerPending ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Creating Account...</>
                     ) : (
-                      <>Get Magic Link <ArrowRight className="w-4 h-4" /></>
+                      <><UserPlus className="w-4 h-4" /> Create Account</>
                     )}
                   </Button>
                 </form>
               ) : (
-                <div className="space-y-4">
-                  <div className="bg-green-50 border border-green-200 rounded-xl p-5 text-center">
-                    <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
-                    <p className="text-gray-900 font-semibold mb-1">Login Link Generated</p>
+                <form onSubmit={handleVerifyOtp} className="space-y-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 text-center">
+                    <ShieldCheck className="w-9 h-9 text-[#0047AB] mx-auto mb-3" />
+                    <p className="text-gray-900 font-semibold mb-1">Verify Your Email</p>
                     <p className="text-gray-500 text-sm">
-                      Your one-time login link is ready. It expires in 15 minutes.
+                      We sent a code to <strong className="text-gray-800">{regEmail}</strong>. Enter it below to finish setting up your account.
                     </p>
                   </div>
 
-                  {magicUrl && (
-                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
-                      <p className="text-gray-500 text-xs font-semibold uppercase tracking-wide mb-2">Your Login Link</p>
-                      <p className="text-[#0047AB] text-xs break-all font-mono leading-relaxed">{magicUrl}</p>
-                      <Button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(magicUrl);
-                          toast.success("Link copied to clipboard");
-                        }}
-                        className="mt-3 w-full h-auto gap-1.5 text-xs font-bold uppercase tracking-wide bg-[#0047AB] hover:bg-[#1565C0] text-white py-2.5 rounded-lg"
-                      >
-                        <Copy className="w-3.5 h-3.5" /> Copy Link
-                      </Button>
-                      <p className="text-gray-400 text-xs mt-3 text-center">
-                        Click the link or paste it in your browser to sign in.
-                      </p>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reg-otp" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
+                      Verification Code
+                    </Label>
+                    <div className={inputWrapper}>
+                      <ShieldCheck className={inputIconClass} />
+                      <Input
+                        id="reg-otp"
+                        value={regOtp}
+                        onChange={(e) => setRegOtp(e.target.value)}
+                        placeholder="123456"
+                        required
+                        autoFocus
+                        className={cn(inputFieldClass, "tracking-[0.3em] font-mono")}
+                      />
                     </div>
-                  )}
+                  </div>
 
-                  <button
-                    onClick={() => { setMagicSent(false); setMagicUrl(null); setMagicEmail(""); }}
-                    className="w-full text-gray-400 hover:text-[#0047AB] text-xs transition-colors py-2"
+                  <FieldError message={registerError} />
+
+                  <Button
+                    type="submit"
+                    disabled={verifyPending || !regOtp}
+                    className="w-full h-auto gap-2 bg-[#0047AB] hover:bg-[#1565C0] text-white font-bold text-sm uppercase tracking-wider py-3.5 rounded-xl"
                   >
-                    ← Try a different email
-                  </button>
-                </div>
+                    {verifyPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Verifying...</> : "Verify & Sign In"}
+                  </Button>
+
+                  <div className="flex items-center justify-between text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setRegisterStep("form")}
+                      className="text-gray-400 hover:text-[#0047AB] transition-colors"
+                    >
+                      ← Edit details
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResendOtp}
+                      disabled={resendPending}
+                      className="text-gray-400 hover:text-[#0047AB] transition-colors disabled:opacity-50"
+                    >
+                      {resendPending ? "Sending…" : "Resend code"}
+                    </button>
+                  </div>
+                </form>
               )}
-            </TabsContent>
 
-            {/* ── Register Tab ── */}
-            <TabsContent value="register" className="mt-0">
-              <form onSubmit={handleRegister} className="space-y-4">
-                <p className="text-gray-500 text-sm leading-relaxed">
-                  Create a free demo account to explore Bastion LMS. Demo accounts have access to pre-built sample courses.
-                </p>
-
-                {/* Full Name */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="reg-name" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
-                    Full Name
-                  </Label>
-                  <div className={inputWrapper}>
-                    <User className={inputIconClass} />
-                    <Input
-                      id="reg-name"
-                      type="text"
-                      value={regName}
-                      onChange={(e) => setRegName(e.target.value)}
-                      placeholder="Jane Smith"
-                      required
-                      className={inputFieldClass}
-                    />
-                  </div>
-                </div>
-
-                {/* Email */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="reg-email" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
-                    Email Address
-                  </Label>
-                  <div className={inputWrapper}>
-                    <Mail className={inputIconClass} />
-                    <Input
-                      id="reg-email"
-                      type="email"
-                      value={regEmail}
-                      onChange={(e) => setRegEmail(e.target.value)}
-                      placeholder="you@company.com"
-                      required
-                      className={inputFieldClass}
-                    />
-                  </div>
-                </div>
-
-                {/* Password */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="reg-password" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
-                    Password <span className="text-gray-400 normal-case font-normal">(min. 8 characters)</span>
-                  </Label>
-                  <div className={inputWrapper}>
-                    <Lock className={inputIconClass} />
-                    <Input
-                      id="reg-password"
-                      type={showRegPassword ? "text" : "password"}
-                      value={regPassword}
-                      onChange={(e) => setRegPassword(e.target.value)}
-                      placeholder="••••••••"
-                      required
-                      minLength={8}
-                      className={cn(inputFieldClass, "pr-12")}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowRegPassword(!showRegPassword)}
-                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      {showRegPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Confirm Password */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="reg-confirm" className="text-gray-600 text-xs font-semibold uppercase tracking-wide">
-                    Confirm Password
-                  </Label>
-                  <div className={inputWrapper}>
-                    <Lock className={inputIconClass} />
-                    <Input
-                      id="reg-confirm"
-                      type={showRegConfirm ? "text" : "password"}
-                      value={regConfirm}
-                      onChange={(e) => setRegConfirm(e.target.value)}
-                      placeholder="••••••••"
-                      required
-                      className={cn(inputFieldClass, "pr-12")}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowRegConfirm(!showRegConfirm)}
-                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      {showRegConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <FieldError message={registerMutation.error?.message} />
-
-                <Button
-                  type="submit"
-                  disabled={registerMutation.isPending || !regName || !regEmail || !regPassword || !regConfirm}
-                  className="w-full h-auto gap-2 bg-[#0047AB] hover:bg-[#1565C0] text-white font-bold text-sm uppercase tracking-wider py-3.5 rounded-xl mt-2"
-                >
-                  {registerMutation.isPending ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> Creating Account...</>
-                  ) : (
-                    <><UserPlus className="w-4 h-4" /> Create Demo Account</>
-                  )}
-                </Button>
-
-                {/* Demo account disclaimer */}
-                <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+              {registerStep === "form" && (
+                <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mt-4">
                   <p className="text-blue-700 text-xs leading-relaxed">
-                    <strong>Demo accounts</strong> have access to sample courses only. To unlock full access for your team, contact{" "}
-                    <a href="mailto:info@bastionrsg.com" className="underline hover:text-blue-900">info@bastionrsg.com</a>.
+                    Already have a team account? Ask your Company Admin to{" "}
+                    <Link href="/lms/employees"><span className="underline hover:text-blue-900 cursor-pointer">add you as an employee</span></Link>{" "}
+                    instead of creating a new company here.
                   </p>
                 </div>
-              </form>
+              )}
             </TabsContent>
           </Tabs>
 
@@ -517,7 +748,7 @@ export default function LMSLogin() {
             {tab === "register" ? (
               <button onClick={() => setTab("password")} className="text-[#0047AB] hover:underline">Sign in</button>
             ) : (
-              <button onClick={() => setTab("register")} className="text-[#0047AB] hover:underline">Create a free demo account</button>
+              <button onClick={() => setTab("register")} className="text-[#0047AB] hover:underline">Create one</button>
             )}
           </p>
 

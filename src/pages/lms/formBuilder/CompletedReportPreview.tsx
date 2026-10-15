@@ -12,20 +12,21 @@ import { X, Shield, AlertTriangle, Camera, PenLine, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { MOCK_EMPLOYEES, companyStore, answerSetsStore, type MockForm } from "../mockData";
-import type { FormField, MockFormDefinition, ReportLayoutConfig, ReportSectionKey } from "./types";
-import { REPORT_SECTION_LABELS } from "./types";
+import { MOCK_EMPLOYEES, companyStore } from "../mockData";
+import type { AnswerSetRecord, FormFieldRecord, FormRecord } from "@/lib/api";
+import type { ReportLayoutConfig, ReportSectionKey } from "./types";
+import { DEFAULT_REPORT_LAYOUT, REPORT_SECTION_LABELS } from "./types";
 
 interface CompletedReportPreviewProps {
-  form: MockForm;
-  def: MockFormDefinition;
+  form: FormRecord;
+  answerSets: AnswerSetRecord[];
   onUpdateLayout: (layout: ReportLayoutConfig) => void;
   onClose: () => void;
 }
 
 /** A plausible sample answer per field type — for demonstration only. */
-function sampleAnswer(field: FormField): string {
-  const resolvedOptions = field.answerSetId ? answerSetsStore.find((a) => a.id === field.answerSetId)?.options ?? [] : field.options ?? [];
+function sampleAnswer(field: FormFieldRecord, answerSets: AnswerSetRecord[]): string {
+  const resolvedOptions = field.answerSetId ? answerSets.find((a) => a._id === field.answerSetId)?.options ?? [] : field.options ?? [];
   switch (field.type) {
     case "short_text": return "Sample response";
     case "long_text": return "Sample written response describing the situation in detail for this demonstration report.";
@@ -47,13 +48,13 @@ function sampleAnswer(field: FormField): string {
   }
 }
 
-function isFlagged(field: FormField, answer: string): boolean {
+function isFlagged(field: FormFieldRecord, answer: string): boolean {
   return !!field.flagValues?.includes(answer);
 }
 
-export function CompletedReportPreview({ form, def, onUpdateLayout, onClose }: CompletedReportPreviewProps) {
-  const { reportLayout } = def;
-  const [layout, setLayout] = useState<ReportLayoutConfig>(reportLayout);
+export function CompletedReportPreview({ form, answerSets, onUpdateLayout, onClose }: CompletedReportPreviewProps) {
+  const pages = form.pages ?? [];
+  const [layout, setLayout] = useState<ReportLayoutConfig>((form.reportLayout as ReportLayoutConfig | undefined) ?? DEFAULT_REPORT_LAYOUT);
 
   const toggleSection = (key: ReportSectionKey) => {
     const next = { ...layout, sections: { ...layout.sections, [key]: !layout.sections[key] } };
@@ -66,9 +67,8 @@ export function CompletedReportPreview({ form, def, onUpdateLayout, onClose }: C
     onUpdateLayout(next);
   };
 
-  const allFields = Object.values(def.fields);
-  const answered = allFields.filter((f) => f.type !== "instruction");
-  const flaggedFields = answered.filter((f) => isFlagged(f, sampleAnswer(f)));
+  const allFields = pages.flatMap((p) => p.items).filter((i) => i.kind === "section").flatMap((i) => i.kind === "section" ? i.fields : []);
+  const flaggedFields = allFields.filter((f) => isFlagged(f, sampleAnswer(f, answerSets)));
 
   const pageStyle = layout.pageSize === "letter"
     ? { width: "8.5in", minHeight: "11in" }
@@ -109,8 +109,8 @@ export function CompletedReportPreview({ form, def, onUpdateLayout, onClose }: C
             {layout.sections.toc && (
               <div className="mb-8">
                 <h2 className="font-display font-bold text-sm uppercase tracking-wide mb-2 border-b border-gray-200 pb-1">Table of Contents</h2>
-                {def.pages.map((p, i) => (
-                  <div key={p.id} className="flex justify-between text-sm text-gray-600 py-0.5">
+                {pages.map((p, i) => (
+                  <div key={p._id} className="flex justify-between text-sm text-gray-600 py-0.5">
                     <span>{i + 1}. {p.title}</span><span>{i + 2}</span>
                   </div>
                 ))}
@@ -127,8 +127,8 @@ export function CompletedReportPreview({ form, def, onUpdateLayout, onClose }: C
 
             {layout.sections.summary && (
               <div className="mb-6 bg-[#F4F6F9] rounded-lg p-4 flex gap-6 text-sm">
-                <div><span className="font-bold">{answered.length}</span> questions</div>
-                <div><span className="font-bold">{def.pages.length}</span> pages</div>
+                <div><span className="font-bold">{allFields.length}</span> questions</div>
+                <div><span className="font-bold">{pages.length}</span> pages</div>
                 <div className={flaggedFields.length > 0 ? "text-red-600 font-semibold" : ""}>{flaggedFields.length} flagged</div>
               </div>
             )}
@@ -140,18 +140,18 @@ export function CompletedReportPreview({ form, def, onUpdateLayout, onClose }: C
               </div>
             )}
 
-            {def.pages.map((page) => (
-              <div key={page.id} className="mb-6" style={{ breakInside: "avoid" }}>
+            {pages.map((page) => (
+              <div key={page._id} className="mb-6" style={{ breakInside: "avoid" }}>
                 <h2 className="font-display font-bold text-sm uppercase tracking-wide mb-2 border-b border-gray-200 pb-1">{page.title}</h2>
                 {page.items.map((item) => {
                   if (item.kind === "instruction") return null;
                   if (item.kind === "table" && layout.sections.tables) {
                     return (
-                      <table key={item.table.id} className="w-full text-xs my-2 border-collapse">
-                        <thead><tr>{item.table.columns.map((c) => <th key={c} className="border border-gray-200 bg-gray-50 text-left p-1.5">{c}</th>)}</tr></thead>
+                      <table key={item._id} className="w-full text-xs my-2 border-collapse">
+                        <thead><tr>{item.columns.map((c) => <th key={c._id} className="border border-gray-200 bg-gray-50 text-left p-1.5">{c.label}</th>)}</tr></thead>
                         <tbody>
                           {[0, 1].map((r) => (
-                            <tr key={r}>{item.table.columns.map((c) => <td key={c} className="border border-gray-200 p-1.5 text-gray-400 italic">Sample data</td>)}</tr>
+                            <tr key={r}>{item.columns.map((c) => <td key={c._id} className="border border-gray-200 p-1.5 text-gray-400 italic">Sample data</td>)}</tr>
                           ))}
                         </tbody>
                       </table>
@@ -159,16 +159,14 @@ export function CompletedReportPreview({ form, def, onUpdateLayout, onClose }: C
                   }
                   if (item.kind === "section") {
                     return (
-                      <div key={item.section.id} className="space-y-1.5 my-2">
-                        {item.section.fieldIds.map((fid) => {
-                          const field = def.fields[fid];
-                          if (!field) return null;
-                          const answer = sampleAnswer(field);
+                      <div key={item._id} className="space-y-1.5 my-2">
+                        {item.fields.map((field) => {
+                          const answer = sampleAnswer(field, answerSets);
                           const flagged = isFlagged(field, answer);
                           if (field.type === "photo" && !layout.sections.media) return null;
                           if (field.type === "signature" && !layout.sections.signatures) return null;
                           return (
-                            <div key={fid} className={cn("flex items-start justify-between text-sm py-1", flagged && layout.sections.flaggedItems && "bg-red-50 -mx-1 px-1 rounded")}>
+                            <div key={field._id} className={cn("flex items-start justify-between text-sm py-1", flagged && layout.sections.flaggedItems && "bg-red-50 -mx-1 px-1 rounded")}>
                               <span className="text-gray-500">{field.label}</span>
                               <span className={cn("font-medium text-right flex items-center gap-1", flagged && layout.sections.flaggedItems && "text-red-600")}>
                                 {field.type === "photo" && <Camera size={12} />}
@@ -191,8 +189,8 @@ export function CompletedReportPreview({ form, def, onUpdateLayout, onClose }: C
               <div className="mb-6 border-t-2 border-red-200 pt-4">
                 <h2 className="font-display font-bold text-sm uppercase tracking-wide mb-2 text-red-600">Flagged Items & Corrective Actions</h2>
                 {flaggedFields.map((f) => (
-                  <div key={f.id} className="text-sm text-gray-700 py-1 flex items-center gap-1.5">
-                    <AlertTriangle size={12} className="text-red-500" />{f.label} — {sampleAnswer(f)}
+                  <div key={f._id} className="text-sm text-gray-700 py-1 flex items-center gap-1.5">
+                    <AlertTriangle size={12} className="text-red-500" />{f.label} — {sampleAnswer(f, answerSets)}
                     <span className="text-gray-400 ml-auto text-xs italic">Corrective action pending</span>
                   </div>
                 ))}

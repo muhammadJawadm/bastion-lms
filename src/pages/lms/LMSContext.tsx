@@ -1,33 +1,64 @@
 /**
- * LMS Context — Bastion LMS (UI Prototype)
+ * LMS Context — Bastion LMS
  *
- * This is a static, front-end-only context. There is no real authentication,
- * no database, and no network calls here — `user` is fixed mock data from
- * `mockData.ts`, and `role` is a local switch so every screen can be reviewed
- * from all three perspectives (Platform Admin / Safety Manager / Field Worker)
- * without needing a backend. Nothing in this file calls tRPC or redirects
- * anywhere outside the app.
+ * Real authentication, wired to the backend described in
+ * `Bastion-LMS.postman_collection.json` (see `src/lib/api.ts`). On mount,
+ * a stored token (if any) is exchanged for the current profile via
+ * `GET /users/profile`; `login()` stores the token returned by the real
+ * login/verify-otp calls and populates `user` from the response.
  *
- * Impersonation is preserved as UI-only state for the same reason it existed
- * before: platform admins can "preview as" any client admin or employee.
+ * `role`/`setRole`/`impersonation` are kept for backward compatibility with
+ * existing pages that still read them, but they're no longer a free-standing
+ * "preview as" switch — `role` now mirrors the real signed-in user's role
+ * (mapped to this app's kebab-case `LMSRole`) unless a platform_admin is
+ * actively impersonating someone.
  */
 
-import { createContext, useContext, useState, ReactNode, useCallback } from "react";
-import { MOCK_USER, type MockRole } from "./mockData";
+import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react";
+import { getMyProfile, tokenStorage, type AuthUser } from "@/lib/api";
 
-export type LMSRole = MockRole;
+export type LMSRole = "platform-admin" | "client-admin" | "employee";
+
+/**
+ * The backend's role enum is snake_case and has a 4th value ("user") for
+ * mobile-only accounts that this web app doesn't serve — map it onto
+ * "employee" here so existing role-gated UI keeps working without needing
+ * to know about that distinction.
+ */
+function toLmsRole(backendRole: AuthUser["role"] | undefined): LMSRole {
+  switch (backendRole) {
+    case "platform_admin":
+      return "platform-admin";
+    case "client_admin":
+      return "client-admin";
+    case "employee":
+    case "user":
+    default:
+      return "employee";
+  }
+}
 
 export interface ImpersonationTarget {
   /** The user being impersonated */
-  userId: number;
+  userId: string;
   userName: string | null;
   userEmail: string | null;
   userLmsRole: string;
   /** The company being viewed */
-  companyId: number;
+  companyId: string;
   companyName: string;
   /** What role perspective to show */
   viewAs: "client-admin" | "employee";
+}
+
+export interface LMSUser {
+  id?: string;
+  name?: string | null;
+  email?: string | null;
+  lmsRole?: string;
+  companyId?: string | null;
+  role?: string;
+  mustChangePassword?: boolean;
 }
 
 interface LMSContextType {
@@ -39,32 +70,17 @@ interface LMSContextType {
    */
   role: LMSRole;
   setRole: (r: LMSRole) => void;
-  /** Mock signed-in user */
-  user: {
-    id?: number;
-    name?: string | null;
-    email?: string | null;
-    lmsRole?: string;
-    companyId?: number | null;
-    role?: string;
-  } | null;
+  /** The signed-in user, from the real backend. */
+  user: LMSUser | null;
   /**
    * The effective user — equals user unless impersonating.
    * Use this for companyId, name, etc. in all LMS pages.
    */
-  effectiveUser: {
-    id?: number;
-    name?: string | null;
-    email?: string | null;
-    lmsRole?: string;
-    companyId?: number | null;
-    role?: string;
-  } | null;
+  effectiveUser: LMSUser | null;
   /** Effective companyId — from impersonation target or real user */
-  effectiveCompanyId: number | null;
+  effectiveCompanyId: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  /** Always false in the prototype — no demo self-registration flow is wired up here. */
   isDemo: boolean;
   /** Current impersonation state — null means not impersonating */
   impersonation: ImpersonationTarget | null;
@@ -72,6 +88,12 @@ interface LMSContextType {
   startImpersonation: (target: ImpersonationTarget) => void;
   /** Exit impersonation and return to platform admin view */
   exitImpersonation: () => void;
+  /** Store a token + user from a successful login/verify-otp response. */
+  login: (token: string, authUser: AuthUser) => void;
+  /** Clear the stored session. */
+  logout: () => void;
+  /** Re-fetch the current profile (e.g. after settings change company name). */
+  refreshProfile: () => Promise<void>;
 }
 
 const LMSContext = createContext<LMSContextType>({
@@ -81,19 +103,72 @@ const LMSContext = createContext<LMSContextType>({
   user: null,
   effectiveUser: null,
   effectiveCompanyId: null,
-  isAuthenticated: true,
-  isLoading: false,
+  isAuthenticated: false,
+  isLoading: true,
   isDemo: false,
   impersonation: null,
   startImpersonation: () => {},
   exitImpersonation: () => {},
+  login: () => {},
+  logout: () => {},
+  refreshProfile: async () => {},
 });
 
+function toLmsUser(authUser: AuthUser): LMSUser {
+  return {
+    id: authUser._id,
+    name: authUser.name,
+    email: authUser.email,
+    lmsRole: authUser.role,
+    companyId: authUser.companyId ?? null,
+    role: authUser.role,
+    mustChangePassword: authUser.mustChangePassword,
+  };
+}
+
 export function LMSProvider({ children }: { children: ReactNode }) {
-  // Default view when the prototype loads. Switchable via the sidebar's
-  // role switcher so every screen can be reviewed from any perspective.
-  const [role, setRole] = useState<LMSRole>("client-admin");
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [impersonation, setImpersonation] = useState<ImpersonationTarget | null>(null);
+
+  // On mount: if a token is already stored (returning visit), exchange it
+  // for the current profile. A stale/expired/invalid token just clears
+  // itself out — the app falls back to "signed out" rather than looping.
+  useEffect(() => {
+    const token = tokenStorage.get();
+    if (!token) {
+      setIsLoading(false);
+      return;
+    }
+    getMyProfile()
+      .then((res) => {
+        setAuthUser(res.data);
+        if (res.token) tokenStorage.set(res.token);
+      })
+      .catch(() => {
+        tokenStorage.clear();
+        setAuthUser(null);
+      })
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  const login = useCallback((token: string, newUser: AuthUser) => {
+    tokenStorage.set(token);
+    setAuthUser(newUser);
+  }, []);
+
+  const logout = useCallback(() => {
+    tokenStorage.clear();
+    setAuthUser(null);
+    setImpersonation(null);
+  }, []);
+
+  const refreshProfile = useCallback(async () => {
+    if (!tokenStorage.get()) return;
+    const res = await getMyProfile();
+    setAuthUser(res.data);
+    if (res.token) tokenStorage.set(res.token);
+  }, []);
 
   const startImpersonation = useCallback((target: ImpersonationTarget) => {
     setImpersonation(target);
@@ -103,22 +178,11 @@ export function LMSProvider({ children }: { children: ReactNode }) {
     setImpersonation(null);
   }, []);
 
-  const user = {
-    id: MOCK_USER.id,
-    name: MOCK_USER.name,
-    email: MOCK_USER.email,
-    lmsRole: MOCK_USER.lmsRole,
-    companyId: MOCK_USER.companyId,
-    role: MOCK_USER.role,
-  };
+  const user = authUser ? toLmsUser(authUser) : null;
+  const realRole: LMSRole = toLmsRole(authUser?.role);
+  const effectiveRole: LMSRole = impersonation ? impersonation.viewAs : realRole;
 
-  // realRole always mirrors the switcher in this prototype — there's no
-  // separate "actual" account role since nothing is authenticated for real.
-  const realRole: LMSRole = role;
-
-  const effectiveRole: LMSRole = impersonation ? impersonation.viewAs : role;
-
-  const effectiveUser = impersonation
+  const effectiveUser: LMSUser | null = impersonation
     ? {
         id: impersonation.userId,
         name: impersonation.userName,
@@ -129,23 +193,30 @@ export function LMSProvider({ children }: { children: ReactNode }) {
       }
     : user;
 
-  const effectiveCompanyId = impersonation ? impersonation.companyId : user.companyId;
+  const effectiveCompanyId = impersonation ? impersonation.companyId : (user?.companyId ?? null);
 
   return (
     <LMSContext.Provider
       value={{
         realRole,
         role: effectiveRole,
-        setRole,
+        setRole: () => {
+          // No-op now that role comes from a real signed-in account — kept
+          // so existing call sites (role-switcher UI, already removed from
+          // the nav) don't need to be touched to keep compiling.
+        },
         user,
         effectiveUser,
         effectiveCompanyId,
-        isAuthenticated: true,
-        isLoading: false,
+        isAuthenticated: !!authUser,
+        isLoading,
         isDemo: false,
         impersonation,
         startImpersonation,
         exitImpersonation,
+        login,
+        logout,
+        refreshProfile,
       }}
     >
       {children}

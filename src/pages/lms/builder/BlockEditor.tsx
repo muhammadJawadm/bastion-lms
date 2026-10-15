@@ -18,7 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { mockUploadFile } from "../mockData";
+import { uploadCourseFile, deleteUpload, ApiError, type UploadFolder } from "@/lib/api";
 import type {
   DraftBlock, BlockType, BlockData,
   TextBlockData, VideoBlockData, ImageBlockData, PdfBlockData,
@@ -922,27 +922,37 @@ function SupportingMediaField({
   label?: string;
 }) {
   const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** Tracked only while this field stays mounted — enough to clean up an "oops, wrong file" replace within the same editing session. */
+  const lastUploadIdRef = useRef<string | null>(null);
 
   const handleFile = useCallback(
     async (file: File) => {
       if (!file.type.startsWith("image/")) return;
+      setUploadError(null);
       setUploading(true);
+      setUploadPct(0);
       try {
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-        const result = await mockUploadFile({ base64, filename: file.name, mimeType: file.type, folder: "supporting-media" });
+        const result = await uploadCourseFile(file, "supporting-media", setUploadPct);
         onChange(result.url);
+        if (lastUploadIdRef.current) void deleteUpload(lastUploadIdRef.current).catch(() => {});
+        lastUploadIdRef.current = result.id;
+      } catch (err) {
+        setUploadError(err instanceof ApiError ? err.message : "Upload failed. Please try again.");
       } finally {
         setUploading(false);
       }
     },
     [onChange]
   );
+
+  const handleRemove = () => {
+    onChange("");
+    if (lastUploadIdRef.current) void deleteUpload(lastUploadIdRef.current).catch(() => {});
+    lastUploadIdRef.current = null;
+  };
 
   return (
     <div className="space-y-1.5">
@@ -952,7 +962,7 @@ function SupportingMediaField({
           <img src={url} alt="" className="max-h-40 w-full object-contain" />
           <button
             type="button"
-            onClick={() => onChange("")}
+            onClick={handleRemove}
             className="absolute top-1.5 right-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full p-1"
             title="Remove image"
           >
@@ -960,19 +970,23 @@ function SupportingMediaField({
           </button>
         </div>
       ) : (
-        <div className="flex gap-2">
-          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFile(f); e.target.value = ""; }} />
-          <Button type="button" variant="outline" size="sm" className="text-xs gap-1.5" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-            {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-            Upload
-          </Button>
-          <Input
-            placeholder="or paste an image URL…"
-            className="text-xs flex-1"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); const v = (e.target as HTMLInputElement).value.trim(); if (v) onChange(v); }
-            }}
-          />
+        <div className="space-y-1.5">
+          <div className="flex gap-2">
+            <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFile(f); e.target.value = ""; }} />
+            <Button type="button" variant="outline" size="sm" className="text-xs gap-1.5" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+              {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+              Upload
+            </Button>
+            <Input
+              placeholder="or paste an image URL…"
+              className="text-xs flex-1"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); const v = (e.target as HTMLInputElement).value.trim(); if (v) onChange(v); }
+              }}
+            />
+          </div>
+          {uploading && <UploadProgressBar pct={uploadPct} />}
+          {uploadError && <p className="text-xs text-red-600 font-body">{uploadError}</p>}
         </div>
       )}
     </div>
@@ -980,6 +994,14 @@ function SupportingMediaField({
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function UploadProgressBar({ pct }: { pct: number }) {
+  return (
+    <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+      <div className="h-full bg-[#0047AB] rounded-full transition-all" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
 
 function getVideoEmbedUrl(url: string): string {
   try {
@@ -1012,11 +1034,10 @@ function ImageBlockEditor({
   /** "upload" | "url" — which input mode is active */
   const [mode, setMode] = useState<"upload" | "url">((data.url as string) ? "url" : "upload");
   const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const uploadBase64 = { mutateAsync: mockUploadFile };
 
   /** Shared upload path for file-input selection, drag-and-drop, and clipboard paste. */
   const handleFile = useCallback(
@@ -1025,39 +1046,24 @@ function ImageBlockEditor({
         setUploadError("Please select an image file (JPG, PNG, GIF, WebP).");
         return;
       }
-      if (file.size > 10 * 1024 * 1024) {
-        setUploadError("Image must be under 10 MB.");
-        return;
-      }
 
       setUploadError(null);
       setUploading(true);
+      setUploadPct(0);
 
       try {
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-
-        const result = await uploadBase64.mutateAsync({
-          base64,
-          filename: file.name,
-          mimeType: file.type,
-          folder: "images",
-        });
-
-        onUpdate({ ...data, url: result.url, alt: (data.alt as string) ?? file.name } as ImageBlockData);
+        const result = await uploadCourseFile(file, "lesson-media", setUploadPct);
+        const previousUploadId = data.uploadId as string | undefined;
+        onUpdate({ ...data, url: result.url, alt: (data.alt as string) ?? file.name, uploadId: result.id } as ImageBlockData);
+        if (previousUploadId) void deleteUpload(previousUploadId).catch(() => {});
         setMode("url"); // switch to URL mode to show the preview
       } catch (err) {
-        setUploadError("Upload failed. Please try again.");
-        console.error("[ImageBlockEditor] upload error:", err);
+        setUploadError(err instanceof ApiError ? err.message : "Upload failed. Please try again.");
       } finally {
         setUploading(false);
       }
     },
-    [data, onUpdate, uploadBase64]
+    [data, onUpdate]
   );
 
   const handleFileChange = useCallback(
@@ -1131,7 +1137,7 @@ function ImageBlockEditor({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/jpeg,image/png,image/webp,image/gif"
         className="hidden"
         onChange={handleFileChange}
       />
@@ -1151,7 +1157,8 @@ function ImageBlockEditor({
             {uploading ? (
               <>
                 <Loader2 size={24} className="text-[#0047AB] animate-spin" />
-                <span className="text-sm font-body text-gray-500">Uploading…</span>
+                <span className="text-sm font-body text-gray-500">Uploading… {uploadPct}%</span>
+                <div className="w-full max-w-xs"><UploadProgressBar pct={uploadPct} /></div>
               </>
             ) : (
               <>
@@ -1159,7 +1166,7 @@ function ImageBlockEditor({
                 <span className="text-sm font-display font-bold text-gray-600 group-hover:text-[#0047AB] transition-colors">
                   Click, drag & drop, or paste an image
                 </span>
-                <span className="text-[11px] font-body text-gray-400">JPG, PNG, GIF, WebP — max 10 MB</span>
+                <span className="text-[11px] font-body text-gray-400">JPG, PNG, GIF, WebP — up to 300 MB</span>
               </>
             )}
           </button>
@@ -1229,7 +1236,11 @@ function ImageBlockEditor({
           </button>
           <button
             type="button"
-            onClick={() => onUpdate({ ...data, url: "" } as ImageBlockData)}
+            onClick={() => {
+              const previousUploadId = data.uploadId as string | undefined;
+              onUpdate({ ...data, url: "", uploadId: undefined } as ImageBlockData);
+              if (previousUploadId) void deleteUpload(previousUploadId).catch(() => {});
+            }}
             className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 transition-colors"
             title="Remove image"
           >
@@ -1245,7 +1256,9 @@ function ImageBlockEditor({
 
 /**
  * VideoBlockEditor — allows uploading a video from desktop or embedding via URL.
- * Desktop uploads use trpc.uploads.uploadBase64.
+ * Desktop uploads go through `uploadCourseFile` — a simple proxy upload for
+ * files ≤20MB, or a signed chunked upload straight to Cloudinary for larger
+ * ones (lesson videos routinely run 200-300MB).
  */
 function VideoBlockEditor({
   data,
@@ -1256,11 +1269,10 @@ function VideoBlockEditor({
 }) {
   const [mode, setMode] = useState<"upload" | "url">((data.url as string) ? "url" : "upload");
   const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const uploadBase64 = { mutateAsync: mockUploadFile };
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -1268,40 +1280,24 @@ function VideoBlockEditor({
         setUploadError("Please select a video file (MP4, MOV, WebM).");
         return;
       }
-      // 200 MB limit for videos
-      if (file.size > 200 * 1024 * 1024) {
-        setUploadError("Video must be under 200 MB.");
-        return;
-      }
 
       setUploadError(null);
       setUploading(true);
+      setUploadPct(0);
 
       try {
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-
-        const result = await uploadBase64.mutateAsync({
-          base64,
-          filename: file.name,
-          mimeType: file.type,
-          folder: "videos",
-        });
-
-        onUpdate({ ...data, url: result.url, caption: (data.caption as string) ?? "" } as VideoBlockData);
+        const result = await uploadCourseFile(file, "lesson-media", setUploadPct);
+        const previousUploadId = data.uploadId as string | undefined;
+        onUpdate({ ...data, url: result.url, caption: (data.caption as string) ?? "", uploadId: result.id } as VideoBlockData);
+        if (previousUploadId) void deleteUpload(previousUploadId).catch(() => {});
         setMode("url");
       } catch (err) {
-        setUploadError("Upload failed. Please try again.");
-        console.error("[VideoBlockEditor] upload error:", err);
+        setUploadError(err instanceof ApiError ? err.message : "Upload failed. Please try again.");
       } finally {
         setUploading(false);
       }
     },
-    [data, onUpdate, uploadBase64]
+    [data, onUpdate]
   );
 
   const handleFileChange = useCallback(
@@ -1367,7 +1363,7 @@ function VideoBlockEditor({
           <input
             ref={fileInputRef}
             type="file"
-            accept="video/*"
+            accept="video/mp4,video/quicktime,video/webm,video/x-msvideo"
             className="hidden"
             onChange={handleFileChange}
           />
@@ -1383,7 +1379,8 @@ function VideoBlockEditor({
             {uploading ? (
               <>
                 <Loader2 size={24} className="text-[#0047AB] animate-spin" />
-                <span className="text-sm font-body text-gray-500">Uploading… this may take a moment</span>
+                <span className="text-sm font-body text-gray-500">Uploading… {uploadPct}% — this may take a moment for large files</span>
+                <div className="w-full max-w-xs"><UploadProgressBar pct={uploadPct} /></div>
               </>
             ) : (
               <>
@@ -1391,7 +1388,7 @@ function VideoBlockEditor({
                 <span className="text-sm font-display font-bold text-gray-600 group-hover:text-[#0047AB] transition-colors">
                   Click to select or drag & drop a video
                 </span>
-                <span className="text-[11px] font-body text-gray-400">MP4, MOV, WebM — max 200 MB</span>
+                <span className="text-[11px] font-body text-gray-400">MP4, MOV, WebM — up to 300 MB</span>
               </>
             )}
           </button>
@@ -1465,10 +1462,9 @@ function PdfBlockEditor({
   onUpdate: (d: BlockData) => void;
 }) {
   const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const uploadBase64 = { mutateAsync: mockUploadFile };
 
   const handleFileChange = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1479,43 +1475,28 @@ function PdfBlockEditor({
         setUploadError("Please select a PDF file.");
         return;
       }
-      // 50 MB limit for PDFs
-      if (file.size > 50 * 1024 * 1024) {
-        setUploadError("PDF must be under 50 MB.");
-        return;
-      }
 
       setUploadError(null);
       setUploading(true);
+      setUploadPct(0);
 
       try {
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-
-        const result = await uploadBase64.mutateAsync({
-          base64,
-          filename: file.name,
-          mimeType: "application/pdf",
-          folder: "pdfs",
-        });
-
+        const result = await uploadCourseFile(file, "lesson-media", setUploadPct);
+        const previousUploadId = data.uploadId as string | undefined;
         onUpdate({
           ...data,
           url: result.url,
           title: (data.title as string) || file.name.replace(/\.pdf$/i, ""),
+          uploadId: result.id,
         } as PdfBlockData);
+        if (previousUploadId) void deleteUpload(previousUploadId).catch(() => {});
       } catch (err) {
-        setUploadError("Upload failed. Please try again.");
-        console.error("[PdfBlockEditor] upload error:", err);
+        setUploadError(err instanceof ApiError ? err.message : "Upload failed. Please try again.");
       } finally {
         setUploading(false);
       }
     },
-    [data, onUpdate, uploadBase64]
+    [data, onUpdate]
   );
 
   return (
@@ -1537,7 +1518,8 @@ function PdfBlockEditor({
         {uploading ? (
           <>
             <Loader2 size={24} className="text-red-500 animate-spin" />
-            <span className="text-sm font-body text-gray-500">Uploading PDF…</span>
+            <span className="text-sm font-body text-gray-500">Uploading PDF… {uploadPct}%</span>
+            <div className="w-full max-w-xs"><UploadProgressBar pct={uploadPct} /></div>
           </>
         ) : (
           <>
@@ -1545,7 +1527,7 @@ function PdfBlockEditor({
             <span className="text-sm font-display font-bold text-gray-600 group-hover:text-red-600 transition-colors">
               {(data.url as string) ? "Replace PDF" : "Click to upload a PDF"}
             </span>
-            <span className="text-[11px] font-body text-gray-400">PDF files only — max 50 MB</span>
+            <span className="text-[11px] font-body text-gray-400">PDF files only — up to 300 MB</span>
           </>
         )}
       </button>
@@ -1585,7 +1567,11 @@ function PdfBlockEditor({
           </div>
           <button
             type="button"
-            onClick={() => onUpdate({ ...data, url: "" } as PdfBlockData)}
+            onClick={() => {
+              const previousUploadId = data.uploadId as string | undefined;
+              onUpdate({ ...data, url: "", uploadId: undefined } as PdfBlockData);
+              if (previousUploadId) void deleteUpload(previousUploadId).catch(() => {});
+            }}
             className="text-red-400 hover:text-red-600 transition-colors shrink-0"
             title="Remove PDF"
           >

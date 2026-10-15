@@ -406,7 +406,7 @@ function BuilderCourseCard({ course }: { course: BuilderCourse }) {
     <div className="relative group rounded-xl overflow-hidden bg-[#1a1f35] border border-[#2a2f4a] hover:border-[#3a3f5c] transition-all hover:shadow-xl hover:shadow-black/30">
       {/* Cover image / gradient with hover overlay */}
       <Link href={`/lms/builder/${course.id}`}>
-        <div className={cn("h-44 relative overflow-hidden bg-gradient-to-br", gradient)}>
+        <div className={cn("h-44 relative overflow-hidden bg-linear-to-br", gradient)}>
           {course.coverImageUrl && (
             <img src={course.coverImageUrl} alt={course.title} className="w-full h-full object-cover" />
           )}
@@ -441,7 +441,7 @@ function BuilderCourseCard({ course }: { course: BuilderCourse }) {
           <div className="flex-1 min-w-0">
             {/* Category label */}
             <div className="flex items-center gap-1.5 mb-1">
-              <GraduationCap size={11} className="text-[#5b5fc7] flex-shrink-0" />
+              <GraduationCap size={11} className="text-[#5b5fc7] shrink-0" />
               <span className="text-[#5b5fc7] text-[10px] font-bold uppercase tracking-wider">Course</span>
             </div>
             {/* Course title — links to builder */}
@@ -456,7 +456,7 @@ function BuilderCourseCard({ course }: { course: BuilderCourse }) {
           </div>
 
           {/* Action menu (⋯ button) */}
-          <div className="relative flex-shrink-0">
+          <div className="relative shrink-0">
             <button
               onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
               className="p-1 text-[#4a5070] hover:text-white transition-colors rounded"
@@ -638,7 +638,7 @@ export default function LMSCourseBuilder() {
                 <Link key={course.id} href={`/lms/builder/${course.id}`}>
                   <div className="flex items-center gap-4 bg-[#1a1f35] border border-[#2a2f4a] hover:border-[#3a3f5c] rounded-xl p-4 transition-all hover:shadow-lg cursor-pointer">
                     {/* Thumbnail */}
-                    <div className={cn("w-16 h-12 rounded-lg flex-shrink-0 bg-gradient-to-br overflow-hidden", getCoverGradient(course.id))}>
+                    <div className={cn("w-16 h-12 rounded-lg shrink-0 bg-linear-to-br overflow-hidden", getCoverGradient(course.id))}>
                       {course.coverImageUrl && (
                         <img src={course.coverImageUrl} alt={course.title} className="w-full h-full object-cover" />
                       )}
@@ -651,7 +651,7 @@ export default function LMSCourseBuilder() {
                       )}
                     </div>
                     {/* Metadata: lesson count, status badge, edit icon */}
-                    <div className="flex items-center gap-3 flex-shrink-0">
+                    <div className="flex items-center gap-3 shrink-0">
                       <span className="text-[#4a5070] text-xs">{course.lessonCount ?? 0} lessons</span>
                       <span className={cn(
                         "text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full",

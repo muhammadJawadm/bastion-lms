@@ -62,33 +62,24 @@ import { CoursePreview } from "./builder/CoursePreview";
 import { TemplateLibrary } from "./builder/SlideTemplates";
 import { createTextElement, createImageElement, createVideoElement } from "./builder/SlideCanvas";
 import {
-  type MockCourse, type MockLesson,
-  coursesStore, getCourse, patchCourse,
-  getLessonsByCourse, addLesson, patchLesson, removeLesson,
-  getModulesByCourse, addModule, removeModule,
-  getBlocksByLesson, addBlock as storeAddBlock, patchBlock, removeBlock as storeRemoveBlock, reorderBlocks,
-} from "./mockData";
+  getCourseById, updateCourseSettings,
+  addModule as apiAddModule, updateModule as apiUpdateModule, deleteModule as apiDeleteModule,
+  createLesson as apiCreateLesson, updateLesson as apiUpdateLesson, deleteLesson as apiDeleteLesson,
+  addBlock as apiAddBlock, updateBlock as apiUpdateBlock, deleteBlock as apiDeleteBlock, reorderBlocks as apiReorderBlocks,
+  ApiError,
+  type Course, type CourseModule, type Lesson,
+} from "@/lib/api";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type LessonType = "text" | "video_embed" | "video_upload" | "pdf" | "quiz" | "image" | "resource" | "slides";
-
-interface ActiveLesson extends MockLesson {
-  isDirty?: boolean;
+/** Local view of a module/lesson with a plain `.id` mirroring the API's `_id` — keeps the rest of this file's `.id`-based logic unchanged. */
+type UiModule = CourseModule & { id: string };
+interface UiLesson extends Lesson {
+  id: string;
 }
 
-// ─── Lesson type icon ─────────────────────────────────────────────────────────
-
-function LessonTypeIcon({ type, size = 14 }: { type: LessonType; size?: number }) {
-  switch (type) {
-    case "video_embed": case "video_upload": return <Video size={size} />;
-    case "pdf": return <FileText size={size} />;
-    case "quiz": return <CheckSquare size={size} />;
-    case "image": return <Image size={size} />;
-    case "resource": return <Paperclip size={size} />;
-    case "slides": return <Layers size={size} />;
-    default: return <BookOpen size={size} />;
-  }
+interface ActiveLesson extends UiLesson {
+  isDirty?: boolean;
 }
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
@@ -414,7 +405,7 @@ function PageRow({
 function LessonRow({
   lesson, isActive, isExpanded, onClick, onDelete, onToggle, pageCount,
 }: {
-  lesson: MockLesson;
+  lesson: UiLesson;
   isActive: boolean;
   isExpanded: boolean;
   onClick: () => void;
@@ -433,7 +424,7 @@ function LessonRow({
         {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
       </button>
       <span className={cn("shrink-0", isActive ? "text-[#0047AB]" : "text-gray-400")}>
-        <LessonTypeIcon type={lesson.type as LessonType} size={13} />
+        <BookOpen size={13} />
       </span>
       <span
         className={cn("flex-1 text-xs font-body truncate", isActive ? "text-[#0047AB] font-semibold" : "text-gray-700")}
@@ -651,40 +642,62 @@ function SortablePageTab({
 
 export default function LMSBuilder() {
   const params = useParams<{ courseId?: string }>();
-  const courseId = params.courseId ? Number(params.courseId) : 0;
+  const courseId = params.courseId ?? "";
   const [, navigate] = useLocation();
 
   // The sidebar "Course Builder" nav item links here with no course ID
-  // (a builder needs a specific course). Land on the first available course
-  // instead of an empty "course not found" screen.
+  // (a builder needs a specific course) — nothing to fall back to without a
+  // list call here, so just send the admin to pick one.
   useEffect(() => {
-    if (!params.courseId && coursesStore.length > 0) {
-      navigate(`/lms/builder/${coursesStore[0].id}`, { replace: true });
-    }
+    if (!params.courseId) navigate("/lms/courses", { replace: true });
   }, [params.courseId, navigate]);
 
-  // ── Data (static mock store, no network calls) ──
-  // Re-read on every render from the shared mock store so edits made here
-  // (and courses created on the catalogue page) are reflected immediately.
-  const course = getCourse(courseId);
-  const loadingCourse = false;
-  const allLessons = getLessonsByCourse(courseId);
-  const loadingLessons = false;
-  const modules = getModulesByCourse(courseId);
-  const loadingModules = false;
+  // ── Data — one call returns the course plus every lesson and every page/
+  // block inside each lesson (per the backend's GET /courses/:id). ──
+  const [course, setCourse] = useState<Course | null>(null);
+  const [loadingCourse, setLoadingCourse] = useState(true);
+
+  const loadCourse = useCallback(async () => {
+    if (!courseId) {
+      setLoadingCourse(false);
+      return;
+    }
+    try {
+      const res = await getCourseById(courseId);
+      setCourse(res.data);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't load this course.");
+      setCourse(null);
+    } finally {
+      setLoadingCourse(false);
+    }
+  }, [courseId]);
+
+  useEffect(() => {
+    loadCourse();
+  }, [loadCourse]);
+
+  const allLessons: UiLesson[] = useMemo(
+    () => (course?.lessons ?? []).map((l) => ({ ...l, id: l._id })),
+    [course]
+  );
+  const modules: UiModule[] = useMemo(
+    () => (course?.modules ?? []).map((m) => ({ ...m, id: m._id })),
+    [course]
+  );
 
   // ── Active lesson + active page (block) ──
   const [activeLesson, setActiveLesson] = useState<ActiveLesson | null>(null);
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null);
 
   // ── Sidebar expansion state ──
-  const [expandedLessons, setExpandedLessons] = useState<Set<number>>(new Set());
-  const [expandedModules, setExpandedModules] = useState<Set<number>>(new Set());
+  const [expandedLessons, setExpandedLessons] = useState<Set<string>>(new Set());
+  const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
 
   // ── Dialog state ──
   const [showAddModule, setShowAddModule] = useState(false);
   const [newModuleTitle, setNewModuleTitle] = useState("");
-  const [showAddLesson, setShowAddLesson] = useState<{ moduleId: number | null } | null>(null);
+  const [showAddLesson, setShowAddLesson] = useState<{ moduleId: string | null } | null>(null);
   const [newLessonTitle, setNewLessonTitle] = useState("");
 
   // ── UI state ──
@@ -719,23 +732,22 @@ export default function LMSBuilder() {
   const [courseCertTitle, setCourseCertTitle] = useState("");
   const [courseDuration, setCourseDuration] = useState(30);
   const [courseStatus, setCourseStatus] = useState<"draft" | "published" | "archived">("draft");
-  const [courseIsDemo, setCourseIsDemo] = useState(false);
 
   // ── Lesson edit state ──
   const [lessonTitle, setLessonTitle] = useState("");
   const [lessonRequired, setLessonRequired] = useState(true);
 
-  // ── Load blocks for active lesson (static mock store) ──
+  // ── Load pages for the active lesson — already nested in the course payload. ──
   useEffect(() => {
     if (activeLesson !== null) {
-      const blocksData = getBlocksByLesson(activeLesson.id);
+      const blocksData = activeLesson.blocks ?? [];
       const draftBlocks: DraftBlock[] = blocksData.map(b => ({
-        id: String(b.id),
-        dbId: b.id,
-        lessonId: b.lessonId,
+        id: b._id,
+        dbId: b._id,
+        lessonId: activeLesson.id,
         type: b.type as BlockType,
         data: (b.data ?? {}) as BlockData,
-        sortOrder: b.sortOrder,
+        sortOrder: b.sortOrder ?? 0,
       }));
       setBlocks(draftBlocks);
       setBlocksDirty(false);
@@ -833,20 +845,20 @@ export default function LMSBuilder() {
     setBlocksDirty(true);
   }, []);
 
-  // ── Block mutations (static mock store, no network calls) ──
-  // Aliased on import as storeAddBlock/storeRemoveBlock — this component
-  // already has its own local addBlock/removeBlock UI handlers below.
+  // ── Block mutations ──
   const createBlock = {
-    mutateAsync: async (input: { lessonId: number; type: string; data: any; sortOrder: number }) => storeAddBlock(input),
+    mutateAsync: async (input: { lessonId: string; type: string; data: unknown }) =>
+      (await apiAddBlock(input.lessonId, { type: input.type, data: input.data })).data,
   };
   const updateBlock = {
-    mutateAsync: async (input: { id: number; data: any }) => patchBlock(input.id, { data: input.data }),
+    mutateAsync: async (input: { lessonId: string; id: string; data: unknown }) =>
+      (await apiUpdateBlock(input.lessonId, input.id, { data: input.data })).data,
   };
   const deleteBlock = {
-    mutateAsync: async (input: { id: number }) => storeRemoveBlock(input.id),
+    mutateAsync: async (input: { lessonId: string; id: string }) => apiDeleteBlock(input.lessonId, input.id),
   };
   const reorderBlocksMutation = {
-    mutateAsync: async (input: { lessonId: number; orderedIds: number[] }) => reorderBlocks(input.lessonId, input.orderedIds),
+    mutateAsync: async (input: { lessonId: string; orderedIds: string[] }) => apiReorderBlocks(input.lessonId, input.orderedIds),
   };
 
   /** Add a new page (block) to the current lesson */
@@ -856,24 +868,23 @@ export default function LMSBuilder() {
     try {
       const result = await createBlock.mutateAsync({
         lessonId: activeLesson.id,
-        type: type as "text" | "video" | "image" | "pdf" | "resource" | "checklist" | "acknowledgment" | "policy_ack" | "signature" | "callout" | "warning" | "safety_tip" | "quiz_question" | "canvas_slide" | "quiz_fitb" | "quiz_dragdrop",
+        type,
         data: defaultData,
-        sortOrder: blocks.length,
       });
       const newBlock: DraftBlock = {
-        id: String(result.id),
-        dbId: result.id,
+        id: result._id,
+        dbId: result._id,
         lessonId: activeLesson.id,
         type,
         data: defaultData,
         sortOrder: blocks.length,
       };
       setBlocks(prev => [...prev, newBlock]);
-      setActiveBlockId(String(result.id));
-      setSelectedBlockId(String(result.id));
+      setActiveBlockId(result._id);
+      setSelectedBlockId(result._id);
       toast.success("Page added");
-    } catch {
-      toast.error("Failed to add page");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to add page");
     }
   }, [activeLesson, blocks.length, createBlock]);
 
@@ -886,7 +897,7 @@ export default function LMSBuilder() {
     const block = blocks.find(b => b.id === blockId);
     if (!block?.dbId) return;
     try {
-      await deleteBlock.mutateAsync({ id: block.dbId });
+      await deleteBlock.mutateAsync({ lessonId: block.lessonId, id: block.dbId });
       setBlocks(prev => {
         const remaining = prev.filter(b => b.id !== blockId);
         // Auto-select adjacent page after deletion
@@ -901,8 +912,8 @@ export default function LMSBuilder() {
       });
       if (selectedBlockId === blockId) setSelectedBlockId(null);
       toast.success("Page removed");
-    } catch {
-      toast.error("Failed to remove page");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to remove page");
     }
   }, [blocks, deleteBlock, selectedBlockId, activeBlockId]);
 
@@ -916,11 +927,10 @@ export default function LMSBuilder() {
         lessonId: activeLesson.id,
         type: source.type,
         data: source.data,
-        sortOrder: blocks.length,
       });
       const newBlock: DraftBlock = {
-        id: String(result.id),
-        dbId: result.id,
+        id: result._id,
+        dbId: result._id,
         lessonId: activeLesson.id,
         type: source.type,
         data: source.data,
@@ -978,8 +988,7 @@ export default function LMSBuilder() {
       setCourseIssuesCert(course.issuesCertificate ?? true);
       setCourseCertTitle(course.certificateTitle ?? course.title);
       setCourseDuration(course.durationMinutes ?? 30);
-      setCourseStatus(course.status as "draft" | "published" | "archived");
-      setCourseIsDemo((course as { isDemo?: boolean }).isDemo ?? false);
+      setCourseStatus(course.status);
     }
   }, [course]);
 
@@ -989,101 +998,122 @@ export default function LMSBuilder() {
       setLessonRequired(activeLesson.isRequired ?? true);
       setSelectedBlockId(null);
       // Block loading/reset for the new lesson is handled by the
-      // `getBlocksByLesson` effect above (keyed on the same dependency).
+      // page-loading effect above (keyed on the same dependency).
     }
   }, [activeLesson?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Mutations (static mock store, no network calls) ──
-  const [, forceRender] = useState(0);
-  const bump = () => forceRender((n) => n + 1);
-
+  // ── Course / module / lesson mutations ──
   const updateCourse = {
-    mutateAsync: async (input: { id: number } & Partial<MockCourse>) => {
-      const { id, ...patch } = input;
-      patchCourse(id, patch);
+    mutateAsync: async (input: { id: string } & Partial<Course>) => {
+      const { id, title, description, category, status, durationMinutes, passScore, issuesCertificate, certificateTitle } = input;
+      await updateCourseSettings({ courseId: id, title, description, category, status, durationMinutes, passScore, issuesCertificate, certificateTitle });
       toast.success("Course settings saved");
-      bump();
+      await loadCourse();
     },
   };
 
+  const [isCreatingModule, setIsCreatingModule] = useState(false);
   const createModule = {
-    mutate: (input: { courseId: number; title: string; sortOrder: number }) => {
-      addModule(input.courseId, input.title, input.sortOrder);
-      setShowAddModule(false);
-      setNewModuleTitle("");
-      toast.success("Module added");
-      bump();
+    mutate: (input: { courseId: string; title: string }) => {
+      setIsCreatingModule(true);
+      (async () => {
+        try {
+          await apiAddModule(input.courseId, { title: input.title });
+          await loadCourse();
+          setShowAddModule(false);
+          setNewModuleTitle("");
+          toast.success("Module added");
+        } catch (err) {
+          toast.error(err instanceof ApiError ? err.message : "Failed to add module");
+        } finally {
+          setIsCreatingModule(false);
+        }
+      })();
     },
-    isPending: false,
+    isPending: isCreatingModule,
   };
 
   const deleteModule = {
-    mutate: (input: { id: number }) => {
-      removeModule(input.id);
-      toast.success("Module deleted");
-      bump();
+    mutate: (input: { id: string }) => {
+      (async () => {
+        try {
+          await apiDeleteModule(input.id);
+          await loadCourse();
+          toast.success("Module deleted");
+        } catch (err) {
+          toast.error(err instanceof ApiError ? err.message : "Failed to delete module");
+        }
+      })();
     },
   };
 
+  const [isCreatingLesson, setIsCreatingLesson] = useState(false);
   const createLesson = {
-    // Lessons no longer ask for a content type up front — every new lesson is
-    // created as a plain "text" lesson and seeded with a single title block,
-    // never an auto-generated ending/"That's it" block.
-    mutate: (input: { courseId: number; moduleId?: number; title: string; sortOrder: number }) => {
-      const created = addLesson({
-        courseId: input.courseId,
-        moduleId: input.moduleId ?? null,
-        title: input.title,
-        type: "text",
-        sortOrder: input.sortOrder,
-      });
-      storeAddBlock({
-        lessonId: created.id,
-        type: "text",
-        data: { html: `<h1>${input.title}</h1>` },
-        sortOrder: 0,
-      });
-      setShowAddLesson(null);
-      const newLesson: ActiveLesson = { ...created };
-      setActiveLesson(newLesson);
-      setExpandedLessons(prev => { const n = new Set(Array.from(prev)); n.add(created.id); return n; });
-      setNewLessonTitle("");
-      toast.success("Lesson created");
+    // The backend auto-seeds a first page/block on lesson creation — no
+    // manual seed block needed here.
+    mutate: (input: { courseId: string; moduleId?: string | null; title: string }) => {
+      setIsCreatingLesson(true);
+      (async () => {
+        try {
+          const res = await apiCreateLesson(input.courseId, { title: input.title });
+          let created = res.data;
+          if (input.moduleId) {
+            created = (await apiUpdateLesson(created._id, { moduleId: input.moduleId })).data;
+          }
+          await loadCourse();
+          setShowAddLesson(null);
+          setActiveLesson({ ...created, id: created._id });
+          setExpandedLessons(prev => { const n = new Set(Array.from(prev)); n.add(created._id); return n; });
+          setNewLessonTitle("");
+          toast.success("Lesson created");
+        } catch (err) {
+          toast.error(err instanceof ApiError ? err.message : "Failed to create lesson");
+        } finally {
+          setIsCreatingLesson(false);
+        }
+      })();
     },
-    isPending: false,
+    isPending: isCreatingLesson,
   };
 
   const updateLesson = {
     // No toast here — this backs both the manual Save button and autosave,
     // which fires on every settled edit. Feedback is the Saving/Saved
     // indicator in the lesson header instead of a toast per keystroke pause.
-    mutateAsync: async (input: { id: number } & Partial<MockLesson>) => {
+    mutateAsync: async (input: { id: string } & Partial<Lesson>) => {
       const { id, ...patch } = input;
-      patchLesson(id, patch);
-      bump();
+      await apiUpdateLesson(id, patch);
     },
   };
 
   const deleteLesson = {
-    mutate: (input: { id: number }) => {
-      removeLesson(input.id);
-      setActiveLesson(null);
-      setBlocks([]);
-      setActiveBlockId(null);
-      toast.success("Lesson deleted");
-      bump();
+    mutate: (input: { id: string }) => {
+      (async () => {
+        try {
+          await apiDeleteLesson(input.id);
+          await loadCourse();
+          setActiveLesson(null);
+          setBlocks([]);
+          setActiveBlockId(null);
+          toast.success("Lesson deleted");
+        } catch (err) {
+          toast.error(err instanceof ApiError ? err.message : "Failed to delete lesson");
+        }
+      })();
     },
   };
 
   // ── Derived data ──
+  // Lessons have no sortOrder field server-side — rendered in the array order
+  // the backend already returns (no lesson-reorder endpoint exists either).
   const ungrouped = useMemo(
-    () => allLessons.filter((l) => l.moduleId == null).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
+    () => allLessons.filter((l) => !l.moduleId),
     [allLessons]
   );
   const lessonsByModule = useMemo(() => {
-    const map = new Map<number, MockLesson[]>();
+    const map = new Map<string, UiLesson[]>();
     for (const m of modules) {
-      map.set(m.id, allLessons.filter((l) => l.moduleId === m.id).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)));
+      map.set(m.id, allLessons.filter((l) => l.moduleId === m.id));
     }
     return map;
   }, [allLessons, modules]);
@@ -1105,13 +1135,12 @@ export default function LMSBuilder() {
       await updateLesson.mutateAsync({
         id: activeLesson.id,
         title: lessonTitle,
-        durationMinutes: 5,
         isRequired: lessonRequired,
       });
 
       const dirtyBlocks = blocks.filter(b => b.isDirty && b.dbId);
       await Promise.all(dirtyBlocks.map(b =>
-        updateBlock.mutateAsync({ id: b.dbId!, data: b.data })
+        updateBlock.mutateAsync({ lessonId: activeLesson.id, id: b.dbId!, data: b.data })
       ));
 
       if (blocksDirty && blocks.length > 0) {
@@ -1126,6 +1155,9 @@ export default function LMSBuilder() {
       setActiveLesson((prev) => prev ? { ...prev, isDirty: false } : prev);
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to save lesson");
+      setSaveStatus("idle");
     } finally {
       setIsSaving(false);
     }
@@ -1155,12 +1187,13 @@ export default function LMSBuilder() {
         certificateTitle: courseCertTitle,
         durationMinutes: courseDuration,
         status: courseStatus,
-        isDemo: courseIsDemo,
       });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to save course settings");
     } finally {
       setIsSaving(false);
     }
-  }, [courseId, courseTitle, courseDesc, coursePassScore, courseIssuesCert, courseCertTitle, courseDuration, courseStatus, courseIsDemo, updateCourse]);
+  }, [courseId, courseTitle, courseDesc, coursePassScore, courseIssuesCert, courseCertTitle, courseDuration, courseStatus, updateCourse]);
 
   const handlePublish = useCallback(async () => {
     setIsSaving(true);
@@ -1168,12 +1201,14 @@ export default function LMSBuilder() {
       await updateCourse.mutateAsync({ id: courseId, status: "published" });
       setCourseStatus("published");
       setShowPublishedScreen(true); // Show published confirmation screen
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to publish");
     } finally {
       setIsSaving(false);
     }
   }, [courseId, updateCourse]);
 
-  const toggleLesson = (id: number) => {
+  const toggleLesson = (id: string) => {
     setExpandedLessons(prev => {
       const n = new Set(Array.from(prev));
       n.has(id) ? n.delete(id) : n.add(id);
@@ -1181,7 +1216,7 @@ export default function LMSBuilder() {
     });
   };
 
-  const toggleModule = (id: number) => {
+  const toggleModule = (id: string) => {
     setExpandedModules(prev => {
       const n = new Set(Array.from(prev));
       n.has(id) ? n.delete(id) : n.add(id);
@@ -1190,7 +1225,7 @@ export default function LMSBuilder() {
   };
 
   // ── Loading / error states ──
-  if (loadingCourse || loadingLessons || loadingModules) {
+  if (loadingCourse) {
     return (
       <div className="h-screen flex items-center justify-center bg-[#F4F6F8]">
         <div className="flex flex-col items-center gap-3 text-[#0047AB]">
@@ -1452,7 +1487,7 @@ export default function LMSBuilder() {
             <>
               {/* Lesson header bar */}
               <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-3 shrink-0">
-                <LessonTypeIcon type={activeLesson.type as LessonType} size={16} />
+                <BookOpen size={16} className="text-gray-400" />
                 <span className="font-display font-bold text-[#0F1C2E] text-sm truncate flex-1">{activeLesson.title}</span>
                 <span className="text-xs text-gray-400 font-body shrink-0">
                   {activeBlockId ? `Page ${blocks.findIndex(b => b.id === activeBlockId) + 1} of ${blocks.length}` : `${blocks.length} page${blocks.length !== 1 ? "s" : ""}`}
@@ -1746,7 +1781,7 @@ export default function LMSBuilder() {
               onChange={(e) => setNewModuleTitle(e.target.value)}
               placeholder="e.g. Fall Protection Fundamentals"
               className="font-body"
-              onKeyDown={(e) => { if (e.key === "Enter" && newModuleTitle.trim()) createModule.mutate({ courseId, title: newModuleTitle.trim(), sortOrder: modules.length }); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && newModuleTitle.trim()) createModule.mutate({ courseId, title: newModuleTitle.trim() }); }}
               autoFocus
             />
           </div>
@@ -1754,7 +1789,7 @@ export default function LMSBuilder() {
             <Button variant="outline" onClick={() => setShowAddModule(false)}>Cancel</Button>
             <Button
               className="bg-[#0047AB] hover:bg-[#1565C0] text-white font-display font-bold text-xs tracking-widest uppercase"
-              onClick={() => { if (newModuleTitle.trim()) createModule.mutate({ courseId, title: newModuleTitle.trim(), sortOrder: modules.length }); }}
+              onClick={() => { if (newModuleTitle.trim()) createModule.mutate({ courseId, title: newModuleTitle.trim() }); }}
               disabled={!newModuleTitle.trim() || createModule.isPending}
             >
               {createModule.isPending ? <Loader2 size={12} className="animate-spin mr-1" /> : null}Add Module
@@ -1787,9 +1822,8 @@ export default function LMSBuilder() {
                 if (newLessonTitle.trim() && showAddLesson !== null) {
                   createLesson.mutate({
                     courseId,
-                    moduleId: showAddLesson.moduleId ?? undefined,
+                    moduleId: showAddLesson.moduleId,
                     title: newLessonTitle.trim(),
-                    sortOrder: allLessons.filter((l) => l.moduleId === showAddLesson.moduleId).length,
                   });
                 }
               }}
@@ -1822,21 +1856,20 @@ export default function LMSBuilder() {
                 lessonId: activeLesson.id,
                 type: "canvas_slide",
                 data: slideData as unknown as BlockData,
-                sortOrder: blocks.length,
               });
               const newBlock: DraftBlock = {
-                id: String(result.id),
-                dbId: result.id,
+                id: result._id,
+                dbId: result._id,
                 lessonId: activeLesson.id,
                 type: "canvas_slide",
                 data: slideData as unknown as BlockData,
                 sortOrder: blocks.length,
               };
               setBlocks(prev => [...prev, newBlock]);
-              setActiveBlockId(String(result.id));
+              setActiveBlockId(result._id);
               toast.success("Template applied");
-            } catch {
-              toast.error("Failed to apply template");
+            } catch (err) {
+              toast.error(err instanceof ApiError ? err.message : "Failed to apply template");
             }
             setShowTemplateLibrary(false);
           }}

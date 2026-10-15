@@ -1,8 +1,12 @@
 /**
- * LMS Dashboard — Bastion LMS (UI Prototype)
- * Runs entirely on static mock data — no tRPC, no network calls.
+ * LMS Dashboard — Bastion LMS
+ * Client Admin and Employee dashboards are wired to the real backend
+ * (`src/lib/api.ts`) — Enrollments, People, Certificates, Courses, all
+ * company-scoped automatically. Platform Admin dashboard stays on mock
+ * data for now — no real platform-admin endpoints are wired up yet.
  */
 
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "wouter";
 import {
   Users, BookOpen, AlertTriangle, Award, TrendingUp, ArrowRight,
@@ -21,14 +25,11 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { MOCK_PLATFORM_STATS, MOCK_COMPANIES } from "./mockData";
 import {
-  MOCK_PLATFORM_STATS, MOCK_COMPANIES, MOCK_COMPANY_STATS, MOCK_ENROLLMENTS,
-  MOCK_MY_ENROLLMENTS, MOCK_MY_CERTIFICATES, MOCK_EMPLOYEES, getCourse,
-} from "./mockData";
-
-function getEmployeeName(userId: number): string {
-  return MOCK_EMPLOYEES.find((emp) => emp.id === userId)?.name ?? `Employee #${userId}`;
-}
+  getEnrollments, getCompanyPeople, getCertificates, getCourses,
+  ApiError, type EnrollmentRecord, type CompanyPerson, type CertificateRecord, type Course,
+} from "@/lib/api";
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
 
@@ -219,14 +220,43 @@ function PlatformAdminDashboard() {
 // ─── Client Admin Dashboard ───────────────────────────────────────────────────
 
 function ClientAdminDashboard() {
-  const { user } = useLMS();
-  const companyId = user?.companyId;
+  const { user, effectiveCompanyId } = useLMS();
 
-  const stats = MOCK_COMPANY_STATS;
-  const enrollments = MOCK_ENROLLMENTS;
-  const isLoading = false;
+  const [enrollments, setEnrollments] = useState<EnrollmentRecord[]>([]);
+  const [people, setPeople] = useState<CompanyPerson[]>([]);
+  const [certificates, setCertificates] = useState<CertificateRecord[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  if (!companyId) {
+  const loadAll = useCallback(async () => {
+    if (!effectiveCompanyId) {
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const [enrollRes, peopleRes, certRes, courseRes] = await Promise.all([
+        getEnrollments(),
+        getCompanyPeople({ role: "all" }),
+        getCertificates(),
+        getCourses(),
+      ]);
+      setEnrollments(enrollRes.data);
+      setPeople(peopleRes.data);
+      setCertificates(certRes.data);
+      setCourses(courseRes.data);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't load dashboard data.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [effectiveCompanyId]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  if (!effectiveCompanyId) {
     return (
       <Empty className="py-16 border-none">
         <EmptyHeader>
@@ -240,9 +270,14 @@ function ClientAdminDashboard() {
     );
   }
 
-  const overdue = enrollments?.filter((e) => e.status === "overdue") ?? [];
-  const completed = enrollments?.filter((e) => e.status === "completed") ?? [];
-  const total = enrollments?.length ?? 0;
+  const peopleById = new Map(people.map((p) => [p._id, p]));
+  const courseById = new Map(courses.map((c) => [c._id, c]));
+  const getEmployeeName = (userId: string) => peopleById.get(userId)?.name ?? `Employee #${userId}`;
+  const getCourseTitle = (courseId: string) => courseById.get(courseId)?.title ?? `Course #${courseId}`;
+
+  const overdue = enrollments.filter((e) => e.status === "overdue");
+  const completed = enrollments.filter((e) => e.status === "completed");
+  const total = enrollments.length;
   const completionRate = total > 0 ? Math.round((completed.length / total) * 100) : 0;
 
   // Build trend data from enrollments (last 6 months)
@@ -250,10 +285,11 @@ function ClientAdminDashboard() {
   const trendData = Array.from({ length: 6 }, (_, i) => {
     const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
     const monthName = d.toLocaleString("default", { month: "short" });
-    const monthEnrollments = enrollments?.filter((e) => {
+    const monthEnrollments = enrollments.filter((e) => {
+      if (!e.createdAt) return false;
       const ea = new Date(e.createdAt);
       return ea.getFullYear() === d.getFullYear() && ea.getMonth() === d.getMonth();
-    }) ?? [];
+    });
     const monthCompleted = monthEnrollments.filter((e) => e.status === "completed");
     return { month: monthName, assigned: monthEnrollments.length, completed: monthCompleted.length };
   });
@@ -263,10 +299,10 @@ function ClientAdminDashboard() {
       {/* KPI Row */}
       {isLoading ? <StatGridSkeleton /> : (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard icon={Users} label="Total Employees" value={stats?.totalEmployees ?? 0} sub="Active employees" color="bg-[#0F1C2E]/10 text-[#0F1C2E]" href="/lms/employees" />
+          <StatCard icon={Users} label="Total Employees" value={people.length} sub="Active employees" color="bg-[#0F1C2E]/10 text-[#0F1C2E]" href="/lms/employees" />
           <StatCard icon={CheckCircle2} label="Completion Rate" value={`${completionRate}%`} sub={`${completed.length} of ${total} completed`} color="bg-green-100 text-green-600" />
           <StatCard icon={AlertTriangle} label="Overdue Training" value={overdue.length} sub="Requires attention" color="bg-[#0047AB]/10 text-[#1E90FF]" href="/lms/assignments" />
-          <StatCard icon={Award} label="Certs Issued" value={stats?.completions ?? 0} sub="Completed trainings" color="bg-amber-100 text-amber-600" href="/lms/reports" />
+          <StatCard icon={Award} label="Certs Issued" value={certificates.length} sub="Completed trainings" color="bg-amber-100 text-amber-600" href="/lms/reports" />
         </div>
       )}
 
@@ -322,7 +358,7 @@ function ClientAdminDashboard() {
         ) : overdue.length > 0 ? (
           <div className="divide-y divide-gray-50">
             {overdue.slice(0, 5).map((e) => (
-              <div key={e.id} className="flex items-center gap-3 px-6 py-3 hover:bg-gray-50 transition-colors">
+              <div key={e._id} className="flex items-center gap-3 px-6 py-3 hover:bg-gray-50 transition-colors">
                 <div className="w-8 h-8 rounded-full bg-[#0047AB]/10 flex items-center justify-center flex-shrink-0">
                   <span className="text-[#1E90FF] text-xs font-bold">
                     {getEmployeeName(e.userId).slice(0, 2).toUpperCase()}
@@ -330,7 +366,7 @@ function ClientAdminDashboard() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-gray-800 truncate">{getEmployeeName(e.userId)}</div>
-                  <div className="text-xs text-gray-400">{getCourse(e.courseId)?.title ?? `Course #${e.courseId}`}</div>
+                  <div className="text-xs text-gray-400">{getCourseTitle(e.courseId)}</div>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <Clock className="w-3.5 h-3.5 text-[#1E90FF]" />
@@ -387,10 +423,39 @@ function ClientAdminDashboard() {
 
 function EmployeeDashboard() {
   const { user } = useLMS();
-  const enrollments = MOCK_MY_ENROLLMENTS;
-  const certificates = MOCK_MY_CERTIFICATES;
-  const isLoading = false;
-  const pending = enrollments?.filter((e) => e.status !== "completed") ?? [];
+  const [enrollments, setEnrollments] = useState<EnrollmentRecord[]>([]);
+  const [certificates, setCertificates] = useState<CertificateRecord[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadAll = useCallback(async () => {
+    if (!user?.id) {
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const [enrollRes, certRes, courseRes] = await Promise.all([
+        getEnrollments({ userId: user.id }),
+        getCertificates({ userId: user.id }),
+        getCourses(),
+      ]);
+      setEnrollments(enrollRes.data);
+      setCertificates(certRes.data);
+      setCourses(courseRes.data);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't load your training.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  const courseById = new Map(courses.map((c) => [c._id, c]));
+  const pending = enrollments.filter((e) => e.status !== "completed");
 
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
@@ -420,14 +485,14 @@ function EmployeeDashboard() {
           <div className="space-y-3">
             {Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}
           </div>
-        ) : enrollments && enrollments.length > 0 ? (
+        ) : enrollments.length > 0 ? (
           <div className="space-y-3">
             {enrollments.map((e) => (
-              <Link key={e.id} href={`/lms/courses/${e.courseId}`}>
+              <Link key={e._id} href={`/lms/courses/${e.courseId}`}>
                 <div className="bg-white rounded-xl border border-gray-100 hover:shadow-md transition-shadow cursor-pointer overflow-hidden flex">
                   <div className="flex-1 p-4 min-w-0">
                     <div className="flex items-start justify-between gap-2 mb-1">
-                      <div className="text-sm font-bold text-gray-800 leading-tight">{getCourse(e.courseId)?.title ?? `Course #${e.courseId}`}</div>
+                      <div className="text-sm font-bold text-gray-800 leading-tight">{courseById.get(e.courseId)?.title ?? `Course #${e.courseId}`}</div>
                       {e.status === "completed" ? (
                         <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
                       ) : e.dueDate ? (
@@ -468,17 +533,18 @@ function EmployeeDashboard() {
       </div>
 
       {/* My Certificates */}
-      {!isLoading && certificates && certificates.length > 0 && (
+      {!isLoading && certificates.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-100 p-6">
           <h3 className="font-display font-bold text-[#0F1C2E] text-xl uppercase mb-4">My Certificates</h3>
           <div className="space-y-3">
             {certificates.map((cert) => (
-              <div key={cert.id} className="flex items-center gap-3 p-3 bg-[#F4F6F9] rounded-lg">
+              <div key={cert._id} className="flex items-center gap-3 p-3 bg-[#F4F6F9] rounded-lg">
                 <Award className="w-8 h-8 text-[#1E90FF] flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-bold text-gray-800">Certificate #{cert.certificateNumber}</div>
+                  <div className="text-sm font-bold text-gray-800">{cert.certificateTitle || `Certificate #${cert.certificateNumber ?? ""}`}</div>
                   <div className="text-xs text-gray-400">
-                    #{cert.certificateNumber} · Issued {new Date(cert.issuedAt).toLocaleDateString()}
+                    {cert.certificateNumber && `#${cert.certificateNumber} · `}
+                    {cert.issuedAt && `Issued ${new Date(cert.issuedAt).toLocaleDateString()}`}
                     {cert.expiresAt && ` · Expires ${new Date(cert.expiresAt).toLocaleDateString()}`}
                   </div>
                 </div>

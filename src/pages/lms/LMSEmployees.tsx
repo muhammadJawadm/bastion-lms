@@ -1,11 +1,12 @@
 /**
- * LMS Employees — Client Admin view (UI Prototype)
- * Manage employees: list, invite by email, bulk CSV upload, view training status.
- * Runs entirely on local mock state — invites and imports just add rows to an
- * in-memory list seeded from mockData.ts. No tRPC, no network calls.
+ * LMS Employees — Client Admin view
+ * Manage employees: list, create, bulk CSV upload, view training status.
+ * Wired to the real backend — People (`/users`, no more separate "employee"
+ * role: it's "user" for mobile/field workers and "client_admin" for admins),
+ * Enrollments, and Courses.
  */
 
-import { useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Link } from "wouter";
 import {
   Search, Plus, Upload, Download, Loader2, Users, ClipboardList, Award,
@@ -27,9 +28,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { MOCK_EMPLOYEES, MOCK_COURSES, enrollmentsStore, type MockEmployee } from "./mockData";
+import {
+  getCompanyPeople, createCompanyPerson, updatePerson, getEnrollments, getCourses,
+  ApiError, type CompanyPerson, type EnrollmentRecord, type Course,
+} from "@/lib/api";
 
-const ROLE_LABELS: Record<MockEmployee["lmsRole"], string> = {
+/** UI-facing role — "Employee" is this app's label for the backend's "user" role. */
+type UiRole = "employee" | "client_admin";
+const toUiRole = (r: CompanyPerson["role"]): UiRole => (r === "client_admin" ? "client_admin" : "employee");
+const toApiRole = (r: UiRole): CompanyPerson["role"] => (r === "client_admin" ? "client_admin" : "user");
+
+const ROLE_LABELS: Record<UiRole, string> = {
   client_admin: "Client Admin",
   employee: "Employee",
 };
@@ -54,9 +63,7 @@ function initialsOf(value: string): string {
   return value.split(" ").filter(Boolean).map((n) => n[0]).join("").toUpperCase().slice(0, 2);
 }
 
-/** Generates a random temporary password for a new mobile-app login — this is a UI
- * prototype, so there's no real auth backend; the value is only ever shown once to
- * the admin so they can hand it to the employee for their first mobile sign-in. */
+/** A temporary password for a new mobile-app login — shown once to the admin so they can hand it to the employee (the backend also emails it automatically). */
 function generateTempPassword(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
   let out = "";
@@ -85,60 +92,59 @@ function CopyField({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Training stats for one employee, joined from the shared enrollmentsStore. */
-function getTrainingStats(userId: number) {
-  const rows = enrollmentsStore.filter((e) => e.userId === userId);
+/** Training stats for one employee, joined from the company's enrollments list. */
+function getTrainingStats(userId: string, enrollments: EnrollmentRecord[]) {
+  const rows = enrollments.filter((e) => e.userId === userId);
   const completed = rows.filter((e) => e.status === "completed").length;
   const completionPct = rows.length > 0 ? Math.round((completed / rows.length) * 100) : 0;
-  let lastActivity: Date | null = null;
+  let lastActivity: string | null = null;
   for (const e of rows) {
-    const candidate = e.completedAt ?? e.createdAt;
-    if (!lastActivity || new Date(candidate) > new Date(lastActivity)) lastActivity = candidate;
+    const candidate = e.completionAt ?? e.createdAt;
+    if (candidate && (!lastActivity || new Date(candidate) > new Date(lastActivity))) lastActivity = candidate;
   }
   return { assigned: rows.length, completed, completionPct, lastActivity, enrollments: rows };
 }
 
-let nextMockId = Math.max(...MOCK_EMPLOYEES.map((e) => e.id)) + 1;
-
-function CreateUserModal({ companyId, open, onClose, onCreated }: {
-  companyId: number; open: boolean; onClose: () => void; onCreated: (e: MockEmployee) => void;
+function CreateUserModal({ open, onClose, onCreated }: {
+  open: boolean; onClose: () => void; onCreated: (p: CompanyPerson) => void;
 }) {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [dept, setDept] = useState("");
   const [jobTitle, setJobTitle] = useState("");
-  const [lmsRole, setLmsRole] = useState<MockEmployee["lmsRole"]>("employee");
+  const [uiRole, setUiRole] = useState<UiRole>("employee");
   const [tempPassword, setTempPassword] = useState(() => generateTempPassword());
-  const [emailCreds, setEmailCreds] = useState(true);
   const [isPending, setIsPending] = useState(false);
   const [created, setCreated] = useState<{ email: string; password: string } | null>(null);
 
   const reset = () => {
-    setEmail(""); setName(""); setDept(""); setJobTitle(""); setLmsRole("employee");
-    setTempPassword(generateTempPassword()); setEmailCreds(true); setCreated(null);
+    setEmail(""); setName(""); setDept(""); setJobTitle(""); setUiRole("employee");
+    setTempPassword(generateTempPassword()); setCreated(null);
   };
 
   const handleClose = () => { reset(); onClose(); };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim()) { toast.error("Email is required"); return; }
     setIsPending(true);
-    setTimeout(() => {
-      setIsPending(false);
-      onCreated({
-        id: nextMockId++,
+    try {
+      const res = await createCompanyPerson({
         name: name || email.split("@")[0],
         email,
-        department: dept || "Unassigned",
-        jobTitle: jobTitle || "—",
-        isActive: true,
-        companyId,
-        lmsRole,
+        password: tempPassword,
+        department: dept || undefined,
+        jobTitle: jobTitle || undefined,
+        role: toApiRole(uiRole),
       });
+      onCreated(res.data);
       setCreated({ email, password: tempPassword });
-      toast.success(emailCreds ? `Account created — login details emailed to ${email}` : "Account created");
-    }, 500);
+      toast.success(`Account created — login details emailed to ${email}`);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't create the account.");
+    } finally {
+      setIsPending(false);
+    }
   };
 
   return (
@@ -153,8 +159,7 @@ function CreateUserModal({ companyId, open, onClose, onCreated }: {
               <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
                 <Smartphone className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
                 <p className="text-blue-700 text-xs leading-relaxed">
-                  Share these details with the employee — they'll use them to sign in on the Bastion mobile app.
-                  {emailCreds && " We've also emailed them a copy."}
+                  Share these details with the employee — they'll use them to sign in on the Bastion mobile app. We've also emailed them a copy.
                 </p>
               </div>
               <CopyField label="Email" value={created.email} />
@@ -195,7 +200,7 @@ function CreateUserModal({ companyId, open, onClose, onCreated }: {
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Role</Label>
-                  <Select value={lmsRole} onValueChange={(v) => setLmsRole(v as MockEmployee["lmsRole"])}>
+                  <Select value={uiRole} onValueChange={(v) => setUiRole(v as UiRole)}>
                     <SelectTrigger className="w-full focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20">
                       <SelectValue />
                     </SelectTrigger>
@@ -215,13 +220,6 @@ function CreateUserModal({ companyId, open, onClose, onCreated }: {
                   </div>
                   <p className="text-[11px] text-gray-400">Used for the employee's first mobile app sign-in — they'll be asked to set their own password after.</p>
                 </div>
-                <div className="flex items-center justify-between pt-1">
-                  <div>
-                    <div className="text-xs font-bold text-gray-600">Email login details</div>
-                    <div className="text-[11px] text-gray-400 mt-0.5">Send the credentials to the employee automatically</div>
-                  </div>
-                  <Switch checked={emailCreds} onCheckedChange={setEmailCreds} />
-                </div>
               </div>
               <DialogFooter className="p-6 pt-4 border-t border-gray-100 shrink-0 sm:justify-stretch">
                 <Button type="button" variant="outline" onClick={handleClose} className="flex-1 h-auto py-3 border-gray-200 text-gray-600 font-bold text-sm uppercase tracking-wide">
@@ -239,8 +237,8 @@ function CreateUserModal({ companyId, open, onClose, onCreated }: {
   );
 }
 
-function CSVUploadModal({ companyId, open, onClose, onImported }: {
-  companyId: number; open: boolean; onClose: () => void; onImported: (rows: MockEmployee[]) => void;
+function CSVUploadModal({ open, onClose, onImported }: {
+  open: boolean; onClose: () => void; onImported: (rows: CompanyPerson[]) => void;
 }) {
   const [csvText, setCsvText] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -257,7 +255,7 @@ function CSVUploadModal({ companyId, open, onClose, onImported }: {
 
   const handleClose = () => { setCsvText(""); setCreatedCreds(null); onClose(); };
 
-  const handleImport = () => {
+  const handleImport = async () => {
     if (!csvText.trim()) { toast.error("Please select or paste a CSV file"); return; }
     const lines = csvText.trim().split("\n").filter(Boolean);
     const header = lines[0]?.toLowerCase() ?? "";
@@ -268,24 +266,36 @@ function CSVUploadModal({ companyId, open, onClose, onImported }: {
       return { email: cols[0] ?? "", name: cols[1], department: cols[2], jobTitle: cols[3] };
     }).filter((e) => e.email);
     if (parsed.length === 0) { toast.error("No valid rows found. Make sure column 1 is email."); return; }
+
     setIsPending(true);
-    setTimeout(() => {
-      setIsPending(false);
-      const rows: MockEmployee[] = parsed.map((p) => ({
-        id: nextMockId++,
-        name: p.name || p.email.split("@")[0],
-        email: p.email,
-        department: p.department || "Unassigned",
-        jobTitle: p.jobTitle || "—",
-        isActive: true,
-        companyId,
-        lmsRole: "employee",
-      }));
-      onImported(rows);
-      setCreatedCreds(rows.map((r) => ({ email: r.email, password: generateTempPassword() })));
-      toast.success(`Created ${rows.length} employee accounts`);
+    const created: CompanyPerson[] = [];
+    const creds: { email: string; password: string }[] = [];
+    let failures = 0;
+    for (const p of parsed) {
+      const password = generateTempPassword();
+      try {
+        const res = await createCompanyPerson({
+          name: p.name || p.email.split("@")[0],
+          email: p.email,
+          password,
+          department: p.department || undefined,
+          jobTitle: p.jobTitle || undefined,
+          role: "user",
+        });
+        created.push(res.data);
+        creds.push({ email: p.email, password });
+      } catch {
+        failures++;
+      }
+    }
+    setIsPending(false);
+    if (created.length > 0) {
+      onImported(created);
+      setCreatedCreds(creds);
       setCsvText("");
-    }, 500);
+    }
+    if (failures > 0) toast.error(`${failures} row${failures !== 1 ? "s" : ""} failed to import`);
+    if (created.length > 0) toast.success(`Created ${created.length} employee account${created.length !== 1 ? "s" : ""}`);
   };
 
   const copyAllCreds = () => {
@@ -384,18 +394,30 @@ function CSVUploadModal({ companyId, open, onClose, onImported }: {
 
 // ─── Employee Detail Drawer ───────────────────────────────────────────────────
 
-function EmployeeDetailDrawer({ employee, onClose, onUpdate }: {
-  employee: MockEmployee;
+function EmployeeDetailDrawer({ employee, enrollments, courses, onClose, onUpdate }: {
+  employee: CompanyPerson;
+  enrollments: EnrollmentRecord[];
+  courses: Course[];
   onClose: () => void;
-  onUpdate: (patch: Partial<MockEmployee>) => void;
+  onUpdate: (patch: Partial<CompanyPerson>) => void;
 }) {
-  const stats = getTrainingStats(employee.id);
-  const courseTitle = (courseId: number) => MOCK_COURSES.find((c) => c.id === courseId)?.title ?? `Course #${courseId}`;
+  const stats = getTrainingStats(employee._id, enrollments);
+  const courseTitle = (courseId: string) => courses.find((c) => c._id === courseId)?.title ?? `Course #${courseId}`;
   const [resetPassword, setResetPassword] = useState<string | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
 
-  const handleResetPassword = () => {
-    setResetPassword(generateTempPassword());
-    toast.success("New temporary password generated");
+  const handleResetPassword = async () => {
+    const newPassword = generateTempPassword();
+    setIsResetting(true);
+    try {
+      await updatePerson(employee._id, { password: newPassword });
+      setResetPassword(newPassword);
+      toast.success("New temporary password set");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't reset the password.");
+    } finally {
+      setIsResetting(false);
+    }
   };
 
   return (
@@ -447,7 +469,7 @@ function EmployeeDetailDrawer({ employee, onClose, onUpdate }: {
               <div className="text-xs font-bold text-gray-600">Role</div>
               <div className="text-[11px] text-gray-400 mt-0.5">Client Admins can manage courses, employees, and billing.</div>
             </div>
-            <Select value={employee.lmsRole} onValueChange={(v) => onUpdate({ lmsRole: v as MockEmployee["lmsRole"] })}>
+            <Select value={toUiRole(employee.role)} onValueChange={(v) => onUpdate({ role: toApiRole(v as UiRole) })}>
               <SelectTrigger className="w-36 h-9 text-xs focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20">
                 <SelectValue />
               </SelectTrigger>
@@ -463,7 +485,7 @@ function EmployeeDetailDrawer({ employee, onClose, onUpdate }: {
               <div className="text-xs font-bold text-gray-600">Active</div>
               <div className="text-[11px] text-gray-400 mt-0.5">Inactive employees keep their history but can't sign in.</div>
             </div>
-            <Switch checked={employee.isActive} onCheckedChange={(v) => onUpdate({ isActive: v })} />
+            <Switch checked={employee.isActive ?? true} onCheckedChange={(v) => onUpdate({ isActive: v })} />
           </div>
 
           <div className="flex items-center justify-between pt-1">
@@ -471,8 +493,8 @@ function EmployeeDetailDrawer({ employee, onClose, onUpdate }: {
               <div className="text-xs font-bold text-gray-600">Mobile App Login</div>
               <div className="text-[11px] text-gray-400 mt-0.5">Reset their password if they're locked out.</div>
             </div>
-            <Button variant="outline" size="sm" onClick={handleResetPassword} className="h-auto py-1.5 text-xs font-bold gap-1.5 border-gray-200 text-gray-600 hover:text-[#0047AB] hover:border-[#0047AB]/40">
-              <KeyRound className="w-3.5 h-3.5" /> Reset Password
+            <Button variant="outline" size="sm" onClick={handleResetPassword} disabled={isResetting} className="h-auto py-1.5 text-xs font-bold gap-1.5 border-gray-200 text-gray-600 hover:text-[#0047AB] hover:border-[#0047AB]/40">
+              {isResetting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />} Reset Password
             </Button>
           </div>
           {resetPassword && <CopyField label="New Temporary Password" value={resetPassword} />}
@@ -507,7 +529,7 @@ function EmployeeDetailDrawer({ employee, onClose, onUpdate }: {
           {stats.enrollments.length > 0 ? (
             <div className="space-y-2">
               {stats.enrollments.map((e) => (
-                <div key={e.id} className="flex items-center justify-between gap-3 p-3 bg-[#F4F6F9] rounded-lg">
+                <div key={e._id} className="flex items-center justify-between gap-3 p-3 bg-[#F4F6F9] rounded-lg">
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-gray-800 truncate">{courseTitle(e.courseId)}</div>
                     <div className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-1">
@@ -539,23 +561,49 @@ function EmployeeDetailDrawer({ employee, onClose, onUpdate }: {
 }
 
 export default function LMSEmployees() {
-  const { role, setRole, user } = useLMS();
+  const { role, setRole, effectiveCompanyId } = useLMS();
   const [search, setSearch] = useState("");
-  const [roleFilter, setRoleFilter] = useState<"all" | MockEmployee["lmsRole"]>("all");
+  const [roleFilter, setRoleFilter] = useState<"all" | UiRole>("all");
   const [groupFilter, setGroupFilter] = useState<string>("all");
   const [showCreateUser, setShowCreateUser] = useState(false);
   const [showCSV, setShowCSV] = useState(false);
-  const [employees, setEmployees] = useState<MockEmployee[]>(MOCK_EMPLOYEES);
-  const [detailEmployee, setDetailEmployee] = useState<MockEmployee | null>(null);
+  const [employees, setEmployees] = useState<CompanyPerson[]>([]);
+  const [enrollments, setEnrollments] = useState<EnrollmentRecord[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [detailEmployee, setDetailEmployee] = useState<CompanyPerson | null>(null);
 
-  // Use the logged-in user's companyId; fall back to 0 (platform admin sees nothing here)
-  const companyId = (user as any)?.companyId ?? 0;
+  const loadAll = useCallback(async () => {
+    if (!effectiveCompanyId) {
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const [peopleRes, enrollRes, courseRes] = await Promise.all([
+        getCompanyPeople({ role: "all" }),
+        getEnrollments(),
+        getCourses(),
+      ]);
+      setEmployees(peopleRes.data);
+      setEnrollments(enrollRes.data);
+      setCourses(courseRes.data);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't load employees.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [effectiveCompanyId]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
 
   // "Group" maps to department — this app's data model doesn't have a
   // separate group entity, and department already functions as the crew/team
   // grouping unit (e.g. "Framing Crew", "Safety", "Excavation").
   const groups = useMemo(
-    () => Array.from(new Set(employees.map((e) => e.department).filter(Boolean))).sort(),
+    () => Array.from(new Set(employees.map((e) => e.department).filter(Boolean))).sort() as string[],
     [employees]
   );
 
@@ -565,15 +613,20 @@ export default function LMSEmployees() {
       (e.name ?? "").toLowerCase().includes(q) ||
       (e.email ?? "").toLowerCase().includes(q) ||
       (e.department ?? "").toLowerCase().includes(q);
-    const matchRole = roleFilter === "all" || e.lmsRole === roleFilter;
+    const matchRole = roleFilter === "all" || toUiRole(e.role) === roleFilter;
     const matchGroup = groupFilter === "all" || e.department === groupFilter;
     return matchSearch && matchRole && matchGroup;
   });
 
-  function handleUpdateEmployee(id: number, patch: Partial<MockEmployee>) {
-    setEmployees((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
-    setDetailEmployee((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
-    toast.success("Employee updated");
+  async function handleUpdateEmployee(id: string, patch: Partial<CompanyPerson>) {
+    try {
+      await updatePerson(id, patch);
+      setEmployees((prev) => prev.map((e) => (e._id === id ? { ...e, ...patch } : e)));
+      setDetailEmployee((prev) => (prev && prev._id === id ? { ...prev, ...patch } : prev));
+      toast.success("Employee updated");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't update the employee.");
+    }
   }
 
   const downloadTemplate = () => {
@@ -585,7 +638,7 @@ export default function LMSEmployees() {
     URL.revokeObjectURL(url);
   };
 
-  if (companyId === 0) {
+  if (!effectiveCompanyId) {
     return (
       <LMSLayout
         title="Employees"
@@ -613,13 +666,15 @@ export default function LMSEmployees() {
       role={role}
       onRoleChange={setRole}
     >
-      <CreateUserModal companyId={companyId} open={showCreateUser} onClose={() => setShowCreateUser(false)} onCreated={(e) => setEmployees((prev) => [e, ...prev])} />
-      <CSVUploadModal companyId={companyId} open={showCSV} onClose={() => setShowCSV(false)} onImported={(rows) => setEmployees((prev) => [...rows, ...prev])} />
+      <CreateUserModal open={showCreateUser} onClose={() => setShowCreateUser(false)} onCreated={(e) => setEmployees((prev) => [e, ...prev])} />
+      <CSVUploadModal open={showCSV} onClose={() => setShowCSV(false)} onImported={(rows) => setEmployees((prev) => [...rows, ...prev])} />
       {detailEmployee && (
         <EmployeeDetailDrawer
           employee={detailEmployee}
+          enrollments={enrollments}
+          courses={courses}
           onClose={() => setDetailEmployee(null)}
-          onUpdate={(patch) => handleUpdateEmployee(detailEmployee.id, patch)}
+          onUpdate={(patch) => handleUpdateEmployee(detailEmployee._id, patch)}
         />
       )}
 
@@ -677,7 +732,9 @@ export default function LMSEmployees() {
         </div>
 
         {/* Table */}
-        {filtered.length > 0 ? (
+        {isLoading ? (
+          <div className="flex items-center justify-center py-20 text-white/40"><Loader2 className="animate-spin" size={24} /></div>
+        ) : filtered.length > 0 ? (
           <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
             <Table>
               <TableHeader>
@@ -693,9 +750,9 @@ export default function LMSEmployees() {
               </TableHeader>
               <TableBody>
                 {filtered.map((emp) => {
-                  const stats = getTrainingStats(emp.id);
+                  const stats = getTrainingStats(emp._id, enrollments);
                   return (
-                  <TableRow key={emp.id} className="border-gray-50 cursor-pointer hover:bg-gray-50/70" onClick={() => setDetailEmployee(emp)}>
+                  <TableRow key={emp._id} className="border-gray-50 cursor-pointer hover:bg-gray-50/70" onClick={() => setDetailEmployee(emp)}>
                     <TableCell className="px-5 py-3">
                       <div className="flex items-center gap-3">
                         <Avatar className="size-8">
@@ -713,9 +770,9 @@ export default function LMSEmployees() {
                     <TableCell className="px-5 py-3 text-gray-500 hidden lg:table-cell">{emp.jobTitle ?? "—"}</TableCell>
                     <TableCell className="px-5 py-3">
                       <Badge className={`border-transparent text-[10px] font-bold uppercase tracking-wide ${
-                        emp.lmsRole === "client_admin" ? "bg-[#0047AB]/10 text-[#0047AB]" : "bg-gray-100 text-gray-500"
+                        emp.role === "client_admin" ? "bg-[#0047AB]/10 text-[#0047AB]" : "bg-gray-100 text-gray-500"
                       }`}>
-                        {ROLE_LABELS[emp.lmsRole]}
+                        {ROLE_LABELS[toUiRole(emp.role)]}
                       </Badge>
                     </TableCell>
                     <TableCell className="px-5 py-3 hidden xl:table-cell">
@@ -735,9 +792,9 @@ export default function LMSEmployees() {
                     </TableCell>
                     <TableCell className="px-5 py-3">
                       <Badge className={`border-transparent text-[10px] font-bold uppercase tracking-wide ${
-                        emp.isActive ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                        (emp.isActive ?? true) ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
                       }`}>
-                        {emp.isActive ? "Active" : "Inactive"}
+                        {(emp.isActive ?? true) ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
                   </TableRow>

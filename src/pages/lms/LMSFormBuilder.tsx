@@ -1,14 +1,21 @@
 /**
  * @file LMSFormBuilder.tsx
- * @description Form Builder for the Bastion LMS Company Admin (UI Prototype).
+ * @description Form Builder for the Bastion LMS Company Admin.
  *
  * Modeled on the Course Builder's three-pane layout (`LMSBuilder.tsx`):
  *  LEFT   — Page list (add / duplicate / delete / drag-reorder)
  *  CENTER — Active page's sections/tables/instructions, with a field picker
  *  RIGHT  — Selected item's settings, or the form's conditional-logic rules
  *
- * Runs entirely on the mock `formDefinitionsStore` in mockData.ts — no
- * network calls, matching every other builder in this app.
+ * Wired to the real backend (`src/lib/api.ts`). Structural actions (add/
+ * delete page/item/field/column) call their endpoint immediately; free-text
+ * edits (titles, labels, help text, option text) are debounced per-target so
+ * typing doesn't spam requests. `logic`/`reportLayout` are opaque blobs the
+ * backend just stores — PATCHed as a single debounced blob on `Form`.
+ *
+ * A few endpoints below (marked in `src/lib/api.ts`) aren't in the Postman
+ * collection — guessed REST shapes for page/item update+delete and page
+ * reorder, since the collection only demonstrated create for those.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "wouter";
@@ -43,19 +50,23 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  getForm, patchForm, getFormDefinition, patchFormDefinition,
-  answerSetsStore, addAnswerSet, patchAnswerSet, removeAnswerSet,
-  type MockForm,
-} from "./mockData";
-import type {
-  FormPage, FormPageItem, FormField, FormFieldType, FormSection, FormTable, FormInstruction,
-  LogicRule, LogicAction, AnswerSet, MockFormDefinition,
-} from "./formBuilder/types";
-import { FIELD_TYPE_LABELS, CHOICE_FIELD_TYPES } from "./formBuilder/types";
+  getFormById, updateForm, addFormPage, updateFormPage, deleteFormPage, reorderFormPages,
+  addFormItem, updateFormItem, deleteFormItem,
+  addFormField, updateFormField, deleteFormField,
+  addFormColumn, updateFormColumn, deleteFormColumn,
+  getAnswerSets, createAnswerSet, updateAnswerSet, deleteAnswerSet,
+  ApiError,
+  type FormRecord, type FormPageRecord, type FormItemRecord, type FormFieldRecord, type FormColumnRecord,
+  type AnswerSetRecord, type AddFormItemInput,
+} from "@/lib/api";
+import type { FormFieldType, LogicRule, LogicAction } from "./formBuilder/types";
+import { FIELD_TYPE_LABELS, CHOICE_FIELD_TYPES, DEFAULT_REPORT_LAYOUT, type ReportLayoutConfig } from "./formBuilder/types";
 import { FormPreview } from "./formBuilder/FormPreview";
 import { CompletedReportPreview } from "./formBuilder/CompletedReportPreview";
 
-const uid = () => crypto.randomUUID();
+type SectionItem = Extract<FormItemRecord, { kind: "section" }>;
+type TableItem = Extract<FormItemRecord, { kind: "table" }>;
+type InstructionItem = Extract<FormItemRecord, { kind: "instruction" }>;
 
 const FIELD_TYPE_ICONS: Record<FormFieldType, React.ElementType> = {
   short_text: Type, long_text: Type, number: Hash, date: Calendar, datetime: Calendar,
@@ -64,19 +75,19 @@ const FIELD_TYPE_ICONS: Record<FormFieldType, React.ElementType> = {
   person: User, location: MapPin, instruction: Info,
 };
 
-function newField(type: FormFieldType): FormField {
-  return {
-    id: uid(),
-    type,
-    label: FIELD_TYPE_LABELS[type],
-    required: false,
-    options: CHOICE_FIELD_TYPES.includes(type) ? ["Option 1", "Option 2"] : undefined,
-  };
+function fieldIcon(type: string): React.ElementType {
+  return FIELD_TYPE_ICONS[type as FormFieldType] ?? Type;
+}
+function fieldTypeLabel(type: string): string {
+  return FIELD_TYPE_LABELS[type as FormFieldType] ?? type;
 }
 
 // ─── Field type picker (mirrors BlockPicker's neutral-card pattern) ───────────
+// "Instruction" is excluded — on the real backend it's a page-item kind
+// (sibling of section/table), not a field type inside a section.
 
 function FieldTypePicker({ onPick, onClose }: { onPick: (type: FormFieldType) => void; onClose: () => void }) {
+  const pickableTypes = (Object.keys(FIELD_TYPE_LABELS) as FormFieldType[]).filter((t) => t !== "instruction");
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-lg rounded-2xl p-0 gap-0 max-h-[85vh] flex flex-col">
@@ -84,7 +95,7 @@ function FieldTypePicker({ onPick, onClose }: { onPick: (type: FormFieldType) =>
           <DialogTitle className="font-display font-bold text-[#0F1C2E] text-lg uppercase">Add Field</DialogTitle>
         </DialogHeader>
         <div className="p-5 grid grid-cols-2 sm:grid-cols-3 gap-2 overflow-y-auto">
-          {(Object.keys(FIELD_TYPE_LABELS) as FormFieldType[]).map((type) => {
+          {pickableTypes.map((type) => {
             const Icon = FIELD_TYPE_ICONS[type];
             return (
               <button
@@ -108,10 +119,10 @@ function FieldTypePicker({ onPick, onClose }: { onPick: (type: FormFieldType) =>
 function SortablePageRow({
   page, isActive, index, onClick, onDuplicate, onDelete,
 }: {
-  page: FormPage; isActive: boolean; index: number;
+  page: FormPageRecord; isActive: boolean; index: number;
   onClick: () => void; onDuplicate: () => void; onDelete: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: page.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: page._id });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
   return (
     <div
@@ -142,12 +153,12 @@ function SortablePageRow({
 export default function LMSFormBuilder() {
   const [, navigate] = useLocation();
   const params = useParams<{ id: string }>();
-  const formId = Number(params.id);
+  const formId = params.id ?? "";
 
-  const [form, setForm] = useState<MockForm | undefined>(() => getForm(formId));
-  const [def, setDef] = useState<MockFormDefinition>(() => getFormDefinition(formId));
-  const [answerSets, setAnswerSets] = useState<AnswerSet[]>(answerSetsStore);
-  const [activePageId, setActivePageId] = useState<string>(def.pages[0]?.id ?? "");
+  const [form, setForm] = useState<FormRecord | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [answerSets, setAnswerSets] = useState<AnswerSetRecord[]>([]);
+  const [activePageId, setActivePageId] = useState<string>("");
   const [selected, setSelected] = useState<{ kind: "field" | "section" | "table" | "instruction"; id: string } | null>(null);
   const [rightPanel, setRightPanel] = useState<"item" | "logic">("item");
   const [pickerForSection, setPickerForSection] = useState<string | null>(null);
@@ -156,33 +167,59 @@ export default function LMSFormBuilder() {
   const [showPreview, setShowPreview] = useState<"desktop" | "mobile" | "pdf" | null>(null);
   const [deletePageId, setDeletePageId] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
-  const [isDirty, setIsDirty] = useState(false);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const activePage = def.pages.find((p) => p.id === activePageId) ?? def.pages[0];
+  const pages = form?.pages ?? [];
+  const activePage = pages.find((p) => p._id === activePageId) ?? pages[0];
+  const logic = (form?.logic as LogicRule[] | undefined) ?? [];
 
-  const update = useCallback((patch: Partial<MockFormDefinition>) => {
-    setDef((prev) => {
-      const next = { ...prev, ...patch };
-      return next;
-    });
-    setIsDirty(true);
+  const loadForm = useCallback(async () => {
+    if (!formId) { setIsLoading(false); return; }
+    try {
+      const res = await getFormById(formId);
+      setForm(res.data);
+      setActivePageId((prev) => prev || res.data.pages?.[0]?._id || "");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't load this form.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [formId]);
+
+  useEffect(() => { loadForm(); }, [loadForm]);
+
+  useEffect(() => {
+    getAnswerSets().then((res) => setAnswerSets(res.data)).catch(() => {});
   }, []);
 
-  // Debounced autosave — mirrors the Course Builder's pattern exactly.
-  useEffect(() => {
-    if (!isDirty) return;
+  // ── Per-target debounce for free-text edits (title/label/help text/etc). ──
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const debouncedSave = useCallback((key: string, fn: () => Promise<unknown>) => {
+    if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key]);
     setSaveStatus("saving");
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      patchFormDefinition(formId, def);
-      setIsDirty(false);
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 1500);
-    }, 800);
-    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [def]);
+    debounceTimers.current[key] = setTimeout(() => {
+      fn()
+        .then(() => {
+          setSaveStatus("saved");
+          setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 1500);
+        })
+        .catch((err) => {
+          toast.error(err instanceof ApiError ? err.message : "Failed to save");
+          setSaveStatus("idle");
+        });
+    }, 700);
+  }, []);
+
+  // ── Form-level blob fields (title/description/logic/reportLayout) ──
+  const saveFormBlob = useCallback((patch: Partial<{ title: string; description: string; logic: unknown[]; reportLayout: unknown }>) => {
+    debouncedSave("form", () => updateForm(formId, patch));
+  }, [formId, debouncedSave]);
+
+  const updatePagesLocal = (nextPages: FormPageRecord[]) => {
+    setForm((prev) => (prev ? { ...prev, pages: nextPages } : prev));
+  };
+  const updatePageItemsLocal = (pageId: string, items: FormItemRecord[]) => {
+    updatePagesLocal(pages.map((p) => (p._id === pageId ? { ...p, items } : p)));
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -192,146 +229,265 @@ export default function LMSFormBuilder() {
   const handlePageDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIdx = def.pages.findIndex((p) => p.id === active.id);
-    const newIdx = def.pages.findIndex((p) => p.id === over.id);
-    update({ pages: arrayMove(def.pages, oldIdx, newIdx) });
+    const oldIdx = pages.findIndex((p) => p._id === active.id);
+    const newIdx = pages.findIndex((p) => p._id === over.id);
+    const reordered = arrayMove(pages, oldIdx, newIdx);
+    updatePagesLocal(reordered);
+    reorderFormPages(formId, reordered.map((p) => p._id)).catch((err) =>
+      toast.error(err instanceof ApiError ? err.message : "Failed to save page order")
+    );
   };
 
-  const handleAddPage = () => {
-    const page: FormPage = { id: uid(), title: `Page ${def.pages.length + 1}`, items: [] };
-    update({ pages: [...def.pages, page] });
-    setActivePageId(page.id);
+  const handleAddPage = async () => {
+    if (!form) return;
+    try {
+      const res = await addFormPage(form._id, { title: `Page ${pages.length + 1}` });
+      updatePagesLocal([...pages, res.data]);
+      setActivePageId(res.data._id);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to add page");
+    }
   };
 
-  const handleDuplicatePage = (pageId: string) => {
-    const page = def.pages.find((p) => p.id === pageId);
+  /** Deep-duplicates a page by sequentially recreating its items/fields/columns through the real API — there's no batch-copy endpoint. */
+  const handleDuplicatePage = async (pageId: string) => {
+    if (!form) return;
+    const page = pages.find((p) => p._id === pageId);
     if (!page) return;
-    // Deep-clone with fresh ids for the page and everything inside it, and
-    // clone the referenced fields into `def.fields` under new ids too.
-    const idMap = new Map<string, string>();
-    const newFields = { ...def.fields };
-    const cloneField = (fieldId: string): string => {
-      const newId = uid();
-      idMap.set(fieldId, newId);
-      newFields[newId] = { ...def.fields[fieldId], id: newId };
-      return newId;
-    };
-    const newItems: FormPageItem[] = page.items.map((item) => {
-      if (item.kind === "section") {
-        return { kind: "section", section: { ...item.section, id: uid(), fieldIds: item.section.fieldIds.map(cloneField) } };
+    try {
+      const newPageRes = await addFormPage(form._id, { title: `${page.title} (Copy)` });
+      let newPage: FormPageRecord = newPageRes.data;
+      for (const item of page.items) {
+        if (item.kind === "section") {
+          const itemRes = await addFormItem(form._id, newPage._id, { kind: "section", title: item.title });
+          let newItem = itemRes.data as SectionItem;
+          for (const field of item.fields) {
+            const fieldRes = await addFormField(form._id, newPage._id, newItem._id, {
+              type: field.type, label: field.label, helpText: field.helpText, required: field.required,
+              options: field.options, answerSetId: field.answerSetId, min: field.min, max: field.max, flagValues: field.flagValues,
+            });
+            newItem = { ...newItem, fields: [...newItem.fields, fieldRes.data] };
+          }
+          newPage = { ...newPage, items: [...newPage.items, newItem] };
+        } else if (item.kind === "table") {
+          const itemRes = await addFormItem(form._id, newPage._id, { kind: "table", title: item.title });
+          let newItem = itemRes.data as TableItem;
+          for (const col of item.columns) {
+            const colRes = await addFormColumn(form._id, newPage._id, newItem._id, { label: col.label });
+            newItem = { ...newItem, columns: [...newItem.columns, colRes.data] };
+          }
+          newPage = { ...newPage, items: [...newPage.items, newItem] };
+        } else {
+          const itemRes = await addFormItem(form._id, newPage._id, { kind: "instruction", body: item.body });
+          newPage = { ...newPage, items: [...newPage.items, itemRes.data] };
+        }
       }
-      if (item.kind === "table") {
-        return { kind: "table", table: { ...item.table, id: uid() } };
-      }
-      return { kind: "instruction", instruction: { ...item.instruction, id: uid() } };
-    });
-    const newPage: FormPage = { id: uid(), title: `${page.title} (Copy)`, items: newItems };
-    const idx = def.pages.findIndex((p) => p.id === pageId);
-    const pages = [...def.pages];
-    pages.splice(idx + 1, 0, newPage);
-    update({ pages, fields: newFields });
-    setActivePageId(newPage.id);
-    toast.success("Page duplicated");
+      const idx = pages.findIndex((p) => p._id === pageId);
+      const next = [...pages];
+      next.splice(idx + 1, 0, newPage);
+      updatePagesLocal(next);
+      setActivePageId(newPage._id);
+      toast.success("Page duplicated");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to duplicate page");
+    }
   };
 
-  const handleDeletePage = () => {
-    if (!deletePageId) return;
-    const pages = def.pages.filter((p) => p.id !== deletePageId);
-    update({ pages: pages.length > 0 ? pages : [{ id: uid(), title: "Page 1", items: [] }] });
-    if (activePageId === deletePageId) setActivePageId(pages[0]?.id ?? "");
-    setDeletePageId(null);
-    toast.success("Page deleted");
+  const handleDeletePage = async () => {
+    if (!deletePageId || !form) return;
+    try {
+      await deleteFormPage(form._id, deletePageId);
+      let remaining = pages.filter((p) => p._id !== deletePageId);
+      if (remaining.length === 0) {
+        const res = await addFormPage(form._id, { title: "Page 1" });
+        remaining = [res.data];
+      }
+      updatePagesLocal(remaining);
+      if (activePageId === deletePageId) setActivePageId(remaining[0]?._id ?? "");
+      setDeletePageId(null);
+      toast.success("Page deleted");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to delete page");
+    }
   };
 
-  const requestDeletePage = (pageId: string) => {
-    const page = def.pages.find((p) => p.id === pageId);
+  const requestDeletePage = async (pageId: string) => {
+    if (!form) return;
+    const page = pages.find((p) => p._id === pageId);
     // Confirm plainly if the page has content or logic references it — a bare
     // empty page can just go, per the report's "confirm only when it matters".
     const hasContent = !!page && page.items.length > 0;
-    const hasLogic = def.logic.some((r) => r.actions.some((a) => a.type === "skip_to" && a.targetPageId === pageId));
+    const hasLogic = logic.some((r) => r.actions.some((a) => a.type === "skip_to" && a.targetPageId === pageId));
     if (hasContent || hasLogic) {
       setDeletePageId(pageId);
     } else {
-      update({ pages: def.pages.filter((p) => p.id !== pageId) });
-      if (activePageId === pageId) setActivePageId(def.pages.find((p) => p.id !== pageId)?.id ?? "");
+      try {
+        await deleteFormPage(form._id, pageId);
+        const remaining = pages.filter((p) => p._id !== pageId);
+        updatePagesLocal(remaining);
+        if (activePageId === pageId) setActivePageId(remaining[0]?._id ?? "");
+      } catch (err) {
+        toast.error(err instanceof ApiError ? err.message : "Failed to delete page");
+      }
     }
+  };
+
+  const handlePageTitleChange = (pageId: string, title: string) => {
+    updatePagesLocal(pages.map((p) => (p._id === pageId ? { ...p, title } : p)));
+    debouncedSave(`page:${pageId}`, () => updateFormPage(formId, pageId, { title }));
   };
 
   // ── Page item mutations ──
-  const updatePageItems = (pageId: string, items: FormPageItem[]) => {
-    update({ pages: def.pages.map((p) => (p.id === pageId ? { ...p, items } : p)) });
-  };
-
-  const handleAddItem = (kind: "section" | "table" | "instruction") => {
-    if (!activePage) return;
-    let item: FormPageItem;
-    if (kind === "section") item = { kind: "section", section: { id: uid(), fieldIds: [] } };
-    else if (kind === "table") item = { kind: "table", table: { id: uid(), title: "Table", columns: ["Column 1", "Column 2"] } };
-    else item = { kind: "instruction", instruction: { id: uid(), body: "Enter instructions for the employee here…" } };
-    updatePageItems(activePage.id, [...activePage.items, item]);
-    setShowAddItem(false);
-  };
-
-  const handleDeleteItem = (item: FormPageItem) => {
-    if (!activePage) return;
-    if (item.kind === "section") {
-      const fields = { ...def.fields };
-      item.section.fieldIds.forEach((id) => delete fields[id]);
-      update({ pages: def.pages.map((p) => (p.id === activePage.id ? { ...p, items: p.items.filter((i) => i !== item) } : p)), fields });
-    } else {
-      updatePageItems(activePage.id, activePage.items.filter((i) => i !== item));
+  const handleAddItem = async (kind: "section" | "table" | "instruction") => {
+    if (!activePage || !form) return;
+    try {
+      const input: AddFormItemInput =
+        kind === "instruction" ? { kind, body: "Enter instructions for the employee here…" } : { kind, title: kind === "table" ? "Table" : undefined };
+      const res = await addFormItem(form._id, activePage._id, input);
+      updatePageItemsLocal(activePage._id, [...activePage.items, res.data]);
+      setShowAddItem(false);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to add item");
     }
-    setSelected(null);
   };
 
-  const handleAddField = (sectionId: string, type: FormFieldType) => {
-    if (!activePage) return;
-    const field = newField(type);
+  const handleDeleteItem = async (item: FormItemRecord) => {
+    if (!activePage || !form) return;
+    try {
+      await deleteFormItem(form._id, activePage._id, item._id);
+      updatePageItemsLocal(activePage._id, activePage.items.filter((i) => i._id !== item._id));
+      setSelected(null);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to delete item");
+    }
+  };
+
+  const handleItemTitleChange = (item: SectionItem | TableItem, title: string) => {
+    if (!activePage || !form) return;
+    updatePageItemsLocal(activePage._id, activePage.items.map((i) => (i._id === item._id ? { ...i, title } : i)));
+    debouncedSave(`item:${item._id}`, () => updateFormItem(form._id, activePage._id, item._id, { title }));
+  };
+
+  const handleInstructionBodyChange = (item: InstructionItem, body: string) => {
+    if (!activePage || !form) return;
+    updatePageItemsLocal(activePage._id, activePage.items.map((i) => (i._id === item._id ? { ...i, body } : i)));
+    debouncedSave(`item:${item._id}`, () => updateFormItem(form._id, activePage._id, item._id, { body }));
+  };
+
+  const handleAddField = async (sectionId: string, type: FormFieldType) => {
+    if (!activePage || !form) return;
+    try {
+      const res = await addFormField(form._id, activePage._id, sectionId, {
+        type,
+        label: FIELD_TYPE_LABELS[type] ?? type,
+        required: false,
+        options: CHOICE_FIELD_TYPES.includes(type) ? ["Option 1", "Option 2"] : undefined,
+      });
+      const items = activePage.items.map((item) =>
+        item.kind === "section" && item._id === sectionId ? { ...item, fields: [...item.fields, res.data] } : item
+      );
+      updatePageItemsLocal(activePage._id, items);
+      setSelected({ kind: "field", id: res.data._id });
+      setRightPanel("item");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to add field");
+    }
+  };
+
+  const handleRemoveFieldFromSection = async (sectionId: string, fieldId: string) => {
+    if (!activePage || !form) return;
+    try {
+      await deleteFormField(form._id, activePage._id, sectionId, fieldId);
+      const items = activePage.items.map((item) =>
+        item.kind === "section" && item._id === sectionId ? { ...item, fields: item.fields.filter((f) => f._id !== fieldId) } : item
+      );
+      updatePageItemsLocal(activePage._id, items);
+      if (selected?.kind === "field" && selected.id === fieldId) setSelected(null);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to remove field");
+    }
+  };
+
+  const updateFieldLocal = (fieldId: string, patch: Partial<FormFieldRecord>) => {
+    if (!activePage || !form) return;
     const items = activePage.items.map((item) =>
-      item.kind === "section" && item.section.id === sectionId
-        ? { ...item, section: { ...item.section, fieldIds: [...item.section.fieldIds, field.id] } }
-        : item
+      item.kind === "section" ? { ...item, fields: item.fields.map((f) => (f._id === fieldId ? { ...f, ...patch } : f)) } : item
     );
-    update({ pages: def.pages.map((p) => (p.id === activePage.id ? { ...p, items } : p)), fields: { ...def.fields, [field.id]: field } });
-    setSelected({ kind: "field", id: field.id });
-    setRightPanel("item");
+    updatePageItemsLocal(activePage._id, items);
+    const sectionItem = activePage.items.find((i): i is SectionItem => i.kind === "section" && i.fields.some((f) => f._id === fieldId));
+    if (!sectionItem) return;
+    debouncedSave(`field:${fieldId}`, () => updateFormField(form._id, activePage._id, sectionItem._id, fieldId, patch));
   };
 
-  const handleRemoveFieldFromSection = (sectionId: string, fieldId: string) => {
-    if (!activePage) return;
-    const items = activePage.items.map((item) =>
-      item.kind === "section" && item.section.id === sectionId
-        ? { ...item, section: { ...item.section, fieldIds: item.section.fieldIds.filter((id) => id !== fieldId) } }
-        : item
-    );
-    const fields = { ...def.fields };
-    delete fields[fieldId];
-    update({ pages: def.pages.map((p) => (p.id === activePage.id ? { ...p, items } : p)), fields });
-    if (selected?.kind === "field" && selected.id === fieldId) setSelected(null);
+  // ── Table columns ──
+  const handleAddColumn = async (table: TableItem) => {
+    if (!activePage || !form) return;
+    try {
+      const res = await addFormColumn(form._id, activePage._id, table._id, { label: `Column ${table.columns.length + 1}` });
+      updatePageItemsLocal(activePage._id, activePage.items.map((i) => (i._id === table._id ? { ...i, columns: [...(i as TableItem).columns, res.data] } : i)));
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to add column");
+    }
+  };
+  const handleColumnLabelChange = (table: TableItem, columnId: string, label: string) => {
+    if (!activePage || !form) return;
+    updatePageItemsLocal(activePage._id, activePage.items.map((i) =>
+      i._id === table._id ? { ...i, columns: (i as TableItem).columns.map((c) => (c._id === columnId ? { ...c, label } : c)) } : i
+    ));
+    debouncedSave(`column:${columnId}`, () => updateFormColumn(form._id, activePage._id, table._id, columnId, { label }));
+  };
+  const handleRemoveColumn = async (table: TableItem, columnId: string) => {
+    if (!activePage || !form) return;
+    try {
+      await deleteFormColumn(form._id, activePage._id, table._id, columnId);
+      updatePageItemsLocal(activePage._id, activePage.items.map((i) =>
+        i._id === table._id ? { ...i, columns: (i as TableItem).columns.filter((c) => c._id !== columnId) } : i
+      ));
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to remove column");
+    }
   };
 
-  const updateField = (fieldId: string, patch: Partial<FormField>) => {
-    update({ fields: { ...def.fields, [fieldId]: { ...def.fields[fieldId], ...patch } } });
+  // ── Logic (opaque blob on Form) ──
+  const updateLogic = (nextLogic: LogicRule[]) => {
+    setForm((prev) => (prev ? { ...prev, logic: nextLogic } : prev));
+    saveFormBlob({ logic: nextLogic });
   };
-
-  // ── Logic ──
   const addLogicRule = () => {
-    const firstField = Object.keys(def.fields)[0];
+    const firstField = allFields[0];
     if (!firstField) { toast.error("Add at least one field before creating a rule."); return; }
-    const rule: LogicRule = { id: uid(), sourceFieldId: firstField, condition: { equals: "" }, actions: [{ type: "flag" }] };
-    update({ logic: [...def.logic, rule] });
+    const rule: LogicRule = { id: crypto.randomUUID(), sourceFieldId: firstField._id, condition: { equals: "" }, actions: [{ type: "flag" }] };
+    updateLogic([...logic, rule]);
   };
   const updateLogicRule = (ruleId: string, patch: Partial<LogicRule>) => {
-    update({ logic: def.logic.map((r) => (r.id === ruleId ? { ...r, ...patch } : r)) });
+    updateLogic(logic.map((r) => (r.id === ruleId ? { ...r, ...patch } : r)));
   };
   const removeLogicRule = (ruleId: string) => {
-    update({ logic: def.logic.filter((r) => r.id !== ruleId) });
+    updateLogic(logic.filter((r) => r.id !== ruleId));
   };
 
-  const allFieldOptions = useMemo(
-    () => Object.values(def.fields).map((f) => ({ id: f.id, label: f.label })),
-    [def.fields]
+  const updateReportLayout = (nextLayout: ReportLayoutConfig) => {
+    setForm((prev) => (prev ? { ...prev, reportLayout: nextLayout } : prev));
+    saveFormBlob({ reportLayout: nextLayout });
+  };
+
+  const allFields = useMemo(
+    () => pages.flatMap((p) => p.items).filter((i): i is SectionItem => i.kind === "section").flatMap((i) => i.fields),
+    [pages]
   );
+  const fieldsById = useMemo(() => Object.fromEntries(allFields.map((f) => [f._id, f])), [allFields]);
+  const allFieldOptions = useMemo(() => allFields.map((f) => ({ id: f._id, label: f.label })), [allFields]);
+
+  if (isLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[#F4F6F8]">
+        <div className="flex flex-col items-center gap-3 text-[#0047AB]">
+          <Loader2 size={32} className="animate-spin" />
+          <span className="font-display font-semibold text-sm tracking-wide">Loading form builder…</span>
+        </div>
+      </div>
+    );
+  }
 
   if (!form || !activePage) {
     return (
@@ -345,15 +501,15 @@ export default function LMSFormBuilder() {
     );
   }
 
-  const selectedField = selected?.kind === "field" ? def.fields[selected.id] : null;
+  const selectedField = selected?.kind === "field" ? fieldsById[selected.id] : null;
   const selectedSection = selected?.kind === "section"
-    ? activePage.items.find((i): i is Extract<FormPageItem, { kind: "section" }> => i.kind === "section" && i.section.id === selected.id)?.section
+    ? activePage.items.find((i): i is SectionItem => i.kind === "section" && i._id === selected.id)
     : null;
   const selectedTable = selected?.kind === "table"
-    ? activePage.items.find((i): i is Extract<FormPageItem, { kind: "table" }> => i.kind === "table" && i.table.id === selected.id)?.table
+    ? activePage.items.find((i): i is TableItem => i.kind === "table" && i._id === selected.id)
     : null;
   const selectedInstruction = selected?.kind === "instruction"
-    ? activePage.items.find((i): i is Extract<FormPageItem, { kind: "instruction" }> => i.kind === "instruction" && i.instruction.id === selected.id)?.instruction
+    ? activePage.items.find((i): i is InstructionItem => i.kind === "instruction" && i._id === selected.id)
     : null;
 
   return (
@@ -366,7 +522,11 @@ export default function LMSFormBuilder() {
         <div className="w-px h-5 bg-white/20" />
         <Input
           value={form.title}
-          onChange={(e) => { const title = e.target.value; setForm((f) => f && { ...f, title }); patchForm(form.id, { title }); }}
+          onChange={(e) => {
+            const title = e.target.value;
+            setForm((f) => f && { ...f, title });
+            saveFormBlob({ title });
+          }}
           className="bg-transparent border-none text-white font-display font-bold text-sm h-auto p-0 focus-visible:ring-0 max-w-xs"
         />
         <div className="ml-auto flex items-center gap-2">
@@ -389,16 +549,16 @@ export default function LMSFormBuilder() {
           </div>
           <div className="flex-1 overflow-y-auto py-1 min-h-0">
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handlePageDragEnd}>
-              <SortableContext items={def.pages.map((p) => p.id)} strategy={verticalListSortingStrategy}>
-                {def.pages.map((page, idx) => (
+              <SortableContext items={pages.map((p) => p._id)} strategy={verticalListSortingStrategy}>
+                {pages.map((page, idx) => (
                   <SortablePageRow
-                    key={page.id}
+                    key={page._id}
                     page={page}
                     index={idx}
-                    isActive={page.id === activePageId}
-                    onClick={() => setActivePageId(page.id)}
-                    onDuplicate={() => handleDuplicatePage(page.id)}
-                    onDelete={() => requestDeletePage(page.id)}
+                    isActive={page._id === activePageId}
+                    onClick={() => setActivePageId(page._id)}
+                    onDuplicate={() => handleDuplicatePage(page._id)}
+                    onDelete={() => requestDeletePage(page._id)}
                   />
                 ))}
               </SortableContext>
@@ -416,7 +576,7 @@ export default function LMSFormBuilder() {
           <div className="max-w-2xl mx-auto space-y-4">
             <Input
               value={activePage.title}
-              onChange={(e) => update({ pages: def.pages.map((p) => (p.id === activePage.id ? { ...p, title: e.target.value } : p)) })}
+              onChange={(e) => handlePageTitleChange(activePage._id, e.target.value)}
               className="font-display font-bold text-xl border-none bg-transparent px-0 focus-visible:ring-0 h-auto"
               placeholder="Page title"
             />
@@ -429,47 +589,45 @@ export default function LMSFormBuilder() {
 
             {activePage.items.map((item) => {
               if (item.kind === "instruction") {
-                const isSelected = selected?.kind === "instruction" && selected.id === item.instruction.id;
+                const isSelected = selected?.kind === "instruction" && selected.id === item._id;
                 return (
-                  <ItemCard key={item.instruction.id} icon={Info} label="Instruction" isSelected={isSelected}
-                    onSelect={() => { setSelected({ kind: "instruction", id: item.instruction.id }); setRightPanel("item"); }}
+                  <ItemCard key={item._id} icon={Info} label="Instruction" isSelected={isSelected}
+                    onSelect={() => { setSelected({ kind: "instruction", id: item._id }); setRightPanel("item"); }}
                     onDelete={() => handleDeleteItem(item)}>
-                    <p className="text-sm text-gray-600 font-body">{item.instruction.body}</p>
+                    <p className="text-sm text-gray-600 font-body">{item.body}</p>
                   </ItemCard>
                 );
               }
               if (item.kind === "table") {
-                const isSelected = selected?.kind === "table" && selected.id === item.table.id;
+                const isSelected = selected?.kind === "table" && selected.id === item._id;
                 return (
-                  <ItemCard key={item.table.id} icon={TableIcon} label="Table" isSelected={isSelected}
-                    onSelect={() => { setSelected({ kind: "table", id: item.table.id }); setRightPanel("item"); }}
+                  <ItemCard key={item._id} icon={TableIcon} label="Table" isSelected={isSelected}
+                    onSelect={() => { setSelected({ kind: "table", id: item._id }); setRightPanel("item"); }}
                     onDelete={() => handleDeleteItem(item)}>
-                    <p className="text-sm font-semibold text-gray-800 mb-1">{item.table.title}</p>
+                    <p className="text-sm font-semibold text-gray-800 mb-1">{item.title}</p>
                     <div className="flex gap-2 flex-wrap">
-                      {item.table.columns.map((c, i) => (
-                        <span key={i} className="text-[11px] bg-gray-100 text-gray-600 rounded px-2 py-0.5">{c}</span>
+                      {item.columns.map((c) => (
+                        <span key={c._id} className="text-[11px] bg-gray-100 text-gray-600 rounded px-2 py-0.5">{c.label}</span>
                       ))}
                     </div>
                   </ItemCard>
                 );
               }
               // section
-              const isSelected = selected?.kind === "section" && selected.id === item.section.id;
+              const isSelected = selected?.kind === "section" && selected.id === item._id;
               return (
-                <ItemCard key={item.section.id} icon={ListChecks} label="Section" isSelected={isSelected}
-                  onSelect={() => { setSelected({ kind: "section", id: item.section.id }); setRightPanel("item"); }}
+                <ItemCard key={item._id} icon={ListChecks} label="Section" isSelected={isSelected}
+                  onSelect={() => { setSelected({ kind: "section", id: item._id }); setRightPanel("item"); }}
                   onDelete={() => handleDeleteItem(item)}>
-                  {item.section.title && <p className="text-sm font-semibold text-gray-800 mb-2">{item.section.title}</p>}
+                  {item.title && <p className="text-sm font-semibold text-gray-800 mb-2">{item.title}</p>}
                   <div className="space-y-1.5">
-                    {item.section.fieldIds.map((fid) => {
-                      const f = def.fields[fid];
-                      if (!f) return null;
-                      const Icon = FIELD_TYPE_ICONS[f.type];
-                      const isFieldSelected = selected?.kind === "field" && selected.id === fid;
+                    {item.fields.map((f) => {
+                      const Icon = fieldIcon(f.type);
+                      const isFieldSelected = selected?.kind === "field" && selected.id === f._id;
                       return (
                         <div
-                          key={fid}
-                          onClick={(e) => { e.stopPropagation(); setSelected({ kind: "field", id: fid }); setRightPanel("item"); }}
+                          key={f._id}
+                          onClick={(e) => { e.stopPropagation(); setSelected({ kind: "field", id: f._id }); setRightPanel("item"); }}
                           className={cn(
                             "flex items-center gap-2 px-2.5 py-2 rounded-lg border cursor-pointer transition-colors group/field",
                             isFieldSelected ? "border-[#0047AB] bg-[#0047AB]/5" : "border-gray-100 hover:border-gray-200 bg-gray-50/50"
@@ -477,8 +635,8 @@ export default function LMSFormBuilder() {
                         >
                           <Icon size={13} className="text-gray-400 shrink-0" />
                           <span className="text-xs text-gray-700 flex-1 truncate">{f.label}{f.required && <span className="text-red-400"> *</span>}</span>
-                          <span className="text-[10px] text-gray-400 shrink-0">{FIELD_TYPE_LABELS[f.type]}</span>
-                          <button onClick={(e) => { e.stopPropagation(); handleRemoveFieldFromSection(item.section.id, fid); }} className="opacity-0 group-hover/field:opacity-100 text-gray-300 hover:text-red-500 shrink-0">
+                          <span className="text-[10px] text-gray-400 shrink-0">{fieldTypeLabel(f.type)}</span>
+                          <button onClick={(e) => { e.stopPropagation(); handleRemoveFieldFromSection(item._id, f._id); }} className="opacity-0 group-hover/field:opacity-100 text-gray-300 hover:text-red-500 shrink-0">
                             <X size={12} />
                           </button>
                         </div>
@@ -486,7 +644,7 @@ export default function LMSFormBuilder() {
                     })}
                   </div>
                   <button
-                    onClick={(e) => { e.stopPropagation(); setPickerForSection(item.section.id); }}
+                    onClick={(e) => { e.stopPropagation(); setPickerForSection(item._id); }}
                     className="mt-2 flex items-center gap-1 text-[11px] text-[#0047AB] hover:underline"
                   >
                     <Plus size={11} />Add Field
@@ -514,7 +672,7 @@ export default function LMSFormBuilder() {
             {rightPanel === "item" && (
               <>
                 {selectedField && (
-                  <FieldSettingsPanel field={selectedField} answerSets={answerSets} onUpdate={(patch) => updateField(selectedField.id, patch)} />
+                  <FieldSettingsPanel field={selectedField} answerSets={answerSets} onUpdate={(patch) => updateFieldLocal(selectedField._id, patch)} />
                 )}
                 {selectedSection && (
                   <div className="p-4 space-y-3">
@@ -522,17 +680,20 @@ export default function LMSFormBuilder() {
                       <Label className="text-xs font-display font-bold text-gray-600 uppercase tracking-wide">Section Title (optional)</Label>
                       <Input
                         value={selectedSection.title ?? ""}
-                        onChange={(e) => updatePageItems(activePage.id, activePage.items.map((i) => i.kind === "section" && i.section.id === selectedSection.id ? { ...i, section: { ...i.section, title: e.target.value } } : i))}
+                        onChange={(e) => handleItemTitleChange(selectedSection, e.target.value)}
                         className="text-sm"
                       />
                     </div>
-                    <p className="text-[11px] text-gray-400">{selectedSection.fieldIds.length} field{selectedSection.fieldIds.length === 1 ? "" : "s"} in this section.</p>
+                    <p className="text-[11px] text-gray-400">{selectedSection.fields.length} field{selectedSection.fields.length === 1 ? "" : "s"} in this section.</p>
                   </div>
                 )}
                 {selectedTable && (
                   <TableSettingsPanel
                     table={selectedTable}
-                    onUpdate={(patch) => updatePageItems(activePage.id, activePage.items.map((i) => i.kind === "table" && i.table.id === selectedTable.id ? { ...i, table: { ...i.table, ...patch } } : i))}
+                    onTitleChange={(title) => handleItemTitleChange(selectedTable, title)}
+                    onAddColumn={() => handleAddColumn(selectedTable)}
+                    onColumnLabelChange={(columnId, label) => handleColumnLabelChange(selectedTable, columnId, label)}
+                    onRemoveColumn={(columnId) => handleRemoveColumn(selectedTable, columnId)}
                   />
                 )}
                 {selectedInstruction && (
@@ -540,7 +701,7 @@ export default function LMSFormBuilder() {
                     <Label className="text-xs font-display font-bold text-gray-600 uppercase tracking-wide">Instruction Text</Label>
                     <Textarea
                       value={selectedInstruction.body}
-                      onChange={(e) => updatePageItems(activePage.id, activePage.items.map((i) => i.kind === "instruction" && i.instruction.id === selectedInstruction.id ? { ...i, instruction: { ...i.instruction, body: e.target.value } } : i))}
+                      onChange={(e) => handleInstructionBodyChange(selectedInstruction, e.target.value)}
                       rows={4}
                       className="text-sm resize-none"
                     />
@@ -553,10 +714,10 @@ export default function LMSFormBuilder() {
             )}
             {rightPanel === "logic" && (
               <LogicPanel
-                rules={def.logic}
-                fields={def.fields}
+                rules={logic}
+                fields={fieldsById}
                 fieldOptions={allFieldOptions}
-                pages={def.pages}
+                pages={pages}
                 answerSets={answerSets}
                 onAdd={addLogicRule}
                 onUpdate={updateLogicRule}
@@ -611,16 +772,16 @@ export default function LMSFormBuilder() {
         <AnswerSetsDrawer
           answerSets={answerSets}
           onClose={() => setShowAnswerSets(false)}
-          onRefresh={() => setAnswerSets([...answerSetsStore])}
+          onRefresh={(sets) => setAnswerSets(sets)}
         />
       )}
 
       {/* ── Previews ── */}
       {showPreview && (
         showPreview === "pdf" ? (
-          <CompletedReportPreview form={form} def={def} onUpdateLayout={(reportLayout) => update({ reportLayout })} onClose={() => setShowPreview(null)} />
+          <CompletedReportPreview form={form} answerSets={answerSets} onUpdateLayout={updateReportLayout} onClose={() => setShowPreview(null)} />
         ) : (
-          <FormPreview form={form} def={def} device={showPreview} onDeviceChange={(d) => setShowPreview(d)} onOpenPdf={() => setShowPreview("pdf")} isDirty={isDirty} onClose={() => setShowPreview(null)} />
+          <FormPreview form={form} answerSets={answerSets} device={showPreview} onDeviceChange={(d) => setShowPreview(d)} onOpenPdf={() => setShowPreview("pdf")} isDirty={saveStatus === "saving"} onClose={() => setShowPreview(null)} />
         )
       )}
     </div>
@@ -655,9 +816,9 @@ function ItemCard({
   );
 }
 
-function FieldSettingsPanel({ field, answerSets, onUpdate }: { field: FormField; answerSets: AnswerSet[]; onUpdate: (patch: Partial<FormField>) => void }) {
-  const isChoice = CHOICE_FIELD_TYPES.includes(field.type);
-  const resolvedOptions = field.answerSetId ? answerSets.find((a) => a.id === field.answerSetId)?.options ?? [] : field.options ?? [];
+function FieldSettingsPanel({ field, answerSets, onUpdate }: { field: FormFieldRecord; answerSets: AnswerSetRecord[]; onUpdate: (patch: Partial<FormFieldRecord>) => void }) {
+  const isChoice = CHOICE_FIELD_TYPES.includes(field.type as FormFieldType);
+  const resolvedOptions = field.answerSetId ? answerSets.find((a) => a._id === field.answerSetId)?.options ?? [] : field.options ?? [];
 
   return (
     <div className="p-4 space-y-4">
@@ -669,12 +830,10 @@ function FieldSettingsPanel({ field, answerSets, onUpdate }: { field: FormField;
         <Label className="text-xs font-display font-bold text-gray-600 uppercase tracking-wide">Help Text</Label>
         <Input value={field.helpText ?? ""} onChange={(e) => onUpdate({ helpText: e.target.value })} placeholder="Optional guidance for the employee" className="text-sm" />
       </div>
-      {field.type !== "instruction" && (
-        <div className="flex items-center justify-between">
-          <Label className="text-xs font-display font-bold text-gray-600 uppercase tracking-wide">Required</Label>
-          <Switch checked={field.required} onCheckedChange={(v) => onUpdate({ required: v })} />
-        </div>
-      )}
+      <div className="flex items-center justify-between">
+        <Label className="text-xs font-display font-bold text-gray-600 uppercase tracking-wide">Required</Label>
+        <Switch checked={!!field.required} onCheckedChange={(v) => onUpdate({ required: v })} />
+      </div>
 
       {field.type === "rating" && (
         <div className="grid grid-cols-2 gap-2">
@@ -697,7 +856,7 @@ function FieldSettingsPanel({ field, answerSets, onUpdate }: { field: FormField;
               <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__inline">Custom options</SelectItem>
-                {answerSets.map((a) => <SelectItem key={a.id} value={a.id}>{a.label}</SelectItem>)}
+                {answerSets.map((a) => <SelectItem key={a._id} value={a._id}>{a.label}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -743,24 +902,30 @@ function FieldSettingsPanel({ field, answerSets, onUpdate }: { field: FormField;
   );
 }
 
-function TableSettingsPanel({ table, onUpdate }: { table: FormTable; onUpdate: (patch: Partial<FormTable>) => void }) {
+function TableSettingsPanel({ table, onTitleChange, onAddColumn, onColumnLabelChange, onRemoveColumn }: {
+  table: TableItem;
+  onTitleChange: (title: string) => void;
+  onAddColumn: () => void;
+  onColumnLabelChange: (columnId: string, label: string) => void;
+  onRemoveColumn: (columnId: string) => void;
+}) {
   return (
     <div className="p-4 space-y-3">
       <div className="space-y-1.5">
         <Label className="text-xs font-display font-bold text-gray-600 uppercase tracking-wide">Table Title</Label>
-        <Input value={table.title} onChange={(e) => onUpdate({ title: e.target.value })} className="text-sm" />
+        <Input value={table.title ?? ""} onChange={(e) => onTitleChange(e.target.value)} className="text-sm" />
       </div>
       <div className="space-y-1.5">
         <Label className="text-xs font-display font-bold text-gray-600 uppercase tracking-wide">Columns</Label>
-        {table.columns.map((col, i) => (
-          <div key={i} className="flex items-center gap-1.5">
-            <Input value={col} onChange={(e) => { const columns = [...table.columns]; columns[i] = e.target.value; onUpdate({ columns }); }} className="text-sm flex-1" />
+        {table.columns.map((col) => (
+          <div key={col._id} className="flex items-center gap-1.5">
+            <Input value={col.label} onChange={(e) => onColumnLabelChange(col._id, e.target.value)} className="text-sm flex-1" />
             {table.columns.length > 1 && (
-              <button onClick={() => onUpdate({ columns: table.columns.filter((_, idx) => idx !== i) })} className="text-gray-300 hover:text-red-500"><X size={13} /></button>
+              <button onClick={() => onRemoveColumn(col._id)} className="text-gray-300 hover:text-red-500"><X size={13} /></button>
             )}
           </div>
         ))}
-        <Button variant="outline" size="sm" onClick={() => onUpdate({ columns: [...table.columns, `Column ${table.columns.length + 1}`] })} className="w-full text-xs">
+        <Button variant="outline" size="sm" onClick={onAddColumn} className="w-full text-xs">
           <Plus size={12} className="mr-1" />Add Column
         </Button>
       </div>
@@ -777,17 +942,17 @@ function LogicPanel({
   rules, fields, fieldOptions, pages, answerSets, onAdd, onUpdate, onRemove,
 }: {
   rules: LogicRule[];
-  fields: Record<string, FormField>;
+  fields: Record<string, FormFieldRecord>;
   fieldOptions: { id: string; label: string }[];
-  pages: FormPage[];
-  answerSets: AnswerSet[];
+  pages: FormPageRecord[];
+  answerSets: AnswerSetRecord[];
   onAdd: () => void;
   onUpdate: (id: string, patch: Partial<LogicRule>) => void;
   onRemove: (id: string) => void;
 }) {
-  const resolveOptions = (field?: FormField): string[] => {
+  const resolveOptions = (field?: FormFieldRecord): string[] => {
     if (!field) return [];
-    if (field.answerSetId) return answerSets.find((a) => a.id === field.answerSetId)?.options ?? [];
+    if (field.answerSetId) return answerSets.find((a) => a._id === field.answerSetId)?.options ?? [];
     if (field.type === "yes_no") return ["Yes", "No"];
     if (field.type === "yes_no_na") return ["Yes", "No", "N/A"];
     return field.options ?? [];
@@ -807,7 +972,7 @@ function LogicPanel({
           const targetId = action.type === "require_followup" ? action.fieldId : action.targetId;
           targetMissing = !fields[targetId];
         } else if (action?.type === "skip_to") {
-          targetMissing = !pages.some((p) => p.id === action.targetPageId);
+          targetMissing = !pages.some((p) => p._id === action.targetPageId);
         }
         const selfReference = (action?.type === "show" || action?.type === "hide") && action.targetId === rule.sourceFieldId;
         const broken = sourceMissing || targetMissing || selfReference;
@@ -838,7 +1003,7 @@ function LogicPanel({
                 const type = v as LogicAction["type"];
                 let newAction: LogicAction;
                 if (type === "show" || type === "hide") newAction = { type, targetId: fieldOptions.find((f) => f.id !== rule.sourceFieldId)?.id ?? rule.sourceFieldId };
-                else if (type === "skip_to") newAction = { type, targetPageId: pages[0]?.id ?? "" };
+                else if (type === "skip_to") newAction = { type, targetPageId: pages[0]?._id ?? "" };
                 else if (type === "require_followup") newAction = { type, fieldId: fieldOptions.find((f) => f.id !== rule.sourceFieldId)?.id ?? rule.sourceFieldId };
                 else if (type === "notify") newAction = { type, role: "Safety Manager" };
                 else newAction = { type: "flag" };
@@ -866,7 +1031,7 @@ function LogicPanel({
             {action?.type === "skip_to" && (
               <Select value={action.targetPageId} onValueChange={(v) => onUpdate(rule.id, { actions: [{ type: "skip_to", targetPageId: v }] })}>
                 <SelectTrigger className="text-xs h-8"><SelectValue placeholder="Select a page" /></SelectTrigger>
-                <SelectContent>{pages.map((p) => <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>)}</SelectContent>
+                <SelectContent>{pages.map((p) => <SelectItem key={p._id} value={p._id}>{p.title}</SelectItem>)}</SelectContent>
               </Select>
             )}
             {action?.type === "notify" && (
@@ -888,20 +1053,48 @@ function LogicPanel({
   );
 }
 
-function AnswerSetsDrawer({ answerSets, onClose, onRefresh }: { answerSets: AnswerSet[]; onClose: () => void; onRefresh: () => void }) {
+function AnswerSetsDrawer({ answerSets, onClose, onRefresh }: {
+  answerSets: AnswerSetRecord[]; onClose: () => void; onRefresh: (sets: AnswerSetRecord[]) => void;
+}) {
   const [newLabel, setNewLabel] = useState("");
 
-  const handleAdd = () => {
-    if (!newLabel.trim()) return;
-    addAnswerSet({ label: newLabel.trim(), options: ["Option 1", "Option 2"] });
-    setNewLabel("");
-    onRefresh();
-    toast.success("Answer set added");
+  const reload = async () => {
+    try {
+      const res = await getAnswerSets();
+      onRefresh(res.data);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to refresh answer sets");
+    }
   };
 
-  const updateOptions = (id: string, options: string[]) => {
-    patchAnswerSet(id, { options });
-    onRefresh();
+  const handleAdd = async () => {
+    if (!newLabel.trim()) return;
+    try {
+      await createAnswerSet({ label: newLabel.trim(), options: ["Option 1", "Option 2"] });
+      setNewLabel("");
+      await reload();
+      toast.success("Answer set added");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to add answer set");
+    }
+  };
+
+  const updateOptions = async (id: string, options: string[]) => {
+    onRefresh(answerSets.map((a) => (a._id === id ? { ...a, options } : a)));
+    try {
+      await updateAnswerSet(id, { options });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to save answer set");
+    }
+  };
+
+  const handleRemove = async (id: string) => {
+    try {
+      await deleteAnswerSet(id);
+      await reload();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to delete answer set");
+    }
   };
 
   return (
@@ -921,21 +1114,19 @@ function AnswerSetsDrawer({ answerSets, onClose, onRefresh }: { answerSets: Answ
             <Button onClick={handleAdd} className="bg-[#0047AB] hover:bg-[#1565C0] text-white shrink-0"><Plus size={14} /></Button>
           </div>
           {answerSets.map((set) => (
-            <div key={set.id} className="border border-gray-200 rounded-xl p-3 space-y-2">
+            <div key={set._id} className="border border-gray-200 rounded-xl p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold text-gray-800">{set.label}</span>
-                {set.isCustom && (
-                  <button onClick={() => { removeAnswerSet(set.id); onRefresh(); }} className="text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
-                )}
+                <button onClick={() => handleRemove(set._id)} className="text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>
               </div>
               <div className="space-y-1">
                 {set.options.map((opt, i) => (
                   <div key={i} className="flex items-center gap-1.5">
-                    <Input value={opt} onChange={(e) => { const options = [...set.options]; options[i] = e.target.value; updateOptions(set.id, options); }} className="text-xs h-8" />
-                    <button onClick={() => updateOptions(set.id, set.options.filter((_, idx) => idx !== i))} className="text-gray-300 hover:text-red-500"><X size={12} /></button>
+                    <Input value={opt} onChange={(e) => { const options = [...set.options]; options[i] = e.target.value; updateOptions(set._id, options); }} className="text-xs h-8" />
+                    <button onClick={() => updateOptions(set._id, set.options.filter((_, idx) => idx !== i))} className="text-gray-300 hover:text-red-500"><X size={12} /></button>
                   </div>
                 ))}
-                <button onClick={() => updateOptions(set.id, [...set.options, "New Option"])} className="text-[11px] text-[#0047AB] hover:underline flex items-center gap-1">
+                <button onClick={() => updateOptions(set._id, [...set.options, "New Option"])} className="text-[11px] text-[#0047AB] hover:underline flex items-center gap-1">
                   <Plus size={10} />Add option
                 </button>
               </div>

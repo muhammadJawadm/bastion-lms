@@ -71,11 +71,11 @@ export default function ImpersonationPicker({ open, onClose }: Props) {
       : null;
 
     const target: ImpersonationTarget = {
-      userId: targetEmployee?.id ?? 0,
+      userId: String(targetEmployee?.id ?? 0),
       userName: targetEmployee?.name ?? null,
       userEmail: targetEmployee?.email ?? null,
       userLmsRole: viewAs === "client-admin" ? "client_admin" : "employee",
-      companyId: selectedCompanyId,
+      companyId: String(selectedCompanyId),
       companyName: companyData.company.name,
       viewAs,
     };

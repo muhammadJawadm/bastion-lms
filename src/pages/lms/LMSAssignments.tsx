@@ -1,11 +1,11 @@
 /**
- * LMS Assignments — Client Admin view (UI Prototype)
- * Assign training to employees, view enrollment status. Runs on local mock
- * state seeded from mockData.ts — assigning training adds rows to an
- * in-memory list. No tRPC, no network calls.
+ * LMS Assignments — Client Admin view
+ * Assign training to employees, view enrollment status. Wired to the real
+ * backend (`src/lib/api.ts`) — Enrollments + Courses + People, all scoped to
+ * the caller's own company automatically.
  */
 
-import { useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Clock, CheckCircle2, AlertTriangle, Users, BookOpen, Loader2 } from "lucide-react";
 import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
@@ -21,7 +21,10 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { MOCK_COURSES, MOCK_EMPLOYEES, enrollmentsStore, addEnrollment, type MockEnrollment } from "./mockData";
+import {
+  getCourses, getCompanyPeople, getEnrollments, createEnrollment,
+  ApiError, type Course, type CompanyPerson, type EnrollmentRecord,
+} from "@/lib/api";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   assigned: { label: "Not Started", color: "bg-gray-100 text-gray-500" },
@@ -36,55 +39,45 @@ function initialsOf(value: string): string {
 }
 
 function AssignModal({
-  companyId,
-  open,
-  onClose,
-  onAssigned,
+  courses, people, open, onClose, onAssigned,
 }: {
-  companyId: number;
+  courses: Course[];
+  people: CompanyPerson[];
   open: boolean;
   onClose: () => void;
   onAssigned: () => void;
 }) {
-  const [selectedCourse, setSelectedCourse] = useState<number | "">("");
-  const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
+  const [selectedCourse, setSelectedCourse] = useState<string>("");
+  const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [dueDate, setDueDate] = useState("");
   const [isPending, setIsPending] = useState(false);
 
-  const courses = MOCK_COURSES;
-  const employees = MOCK_EMPLOYEES.filter((e) => e.companyId === companyId);
-
-  const toggleUser = (id: number) => {
+  const toggleUser = (id: string) => {
     setSelectedUsers((prev) => prev.includes(id) ? prev.filter((u) => u !== id) : [...prev, id]);
   };
 
   const selectAll = () => {
-    const ids = employees.map((e) => e.id);
+    const ids = people.map((p) => p._id);
     setSelectedUsers(ids.length === selectedUsers.length ? [] : ids);
   };
 
-  const handleAssign = () => {
+  const handleAssign = async () => {
     if (!selectedCourse) { toast.error("Select a course"); return; }
     if (selectedUsers.length === 0) { toast.error("Select at least one employee"); return; }
     setIsPending(true);
-    setTimeout(() => {
-      setIsPending(false);
-      selectedUsers.forEach((userId) => {
-        addEnrollment({
-          userId,
-          courseId: Number(selectedCourse),
-          companyId,
-          status: "assigned",
-          progressPct: 0,
-          dueDate: dueDate ? new Date(dueDate) : null,
-          completedAt: null,
-        });
-      });
+    try {
+      await Promise.all(selectedUsers.map((userId) =>
+        createEnrollment({ courseId: selectedCourse, userId, dueDate: dueDate || undefined })
+      ));
       onAssigned();
       toast.success(`Assigned to ${selectedUsers.length} employee(s)`);
       setSelectedCourse(""); setSelectedUsers([]); setDueDate("");
       onClose();
-    }, 500);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't assign training.");
+    } finally {
+      setIsPending(false);
+    }
   };
 
   return (
@@ -96,13 +89,13 @@ function AssignModal({
         <div className="p-6 space-y-4">
           <div className="space-y-1.5">
             <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Course *</Label>
-            <Select value={selectedCourse ? String(selectedCourse) : undefined} onValueChange={(v) => setSelectedCourse(Number(v))}>
+            <Select value={selectedCourse || undefined} onValueChange={setSelectedCourse}>
               <SelectTrigger className="w-full focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20">
                 <SelectValue placeholder="Select a course..." />
               </SelectTrigger>
               <SelectContent>
                 {courses.map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)}>{c.title}</SelectItem>
+                  <SelectItem key={c._id} value={c._id}>{c.title}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -122,24 +115,24 @@ function AssignModal({
             <div className="flex items-center justify-between">
               <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Assign To *</Label>
               <button onClick={selectAll} className="text-xs text-[#0047AB] font-bold hover:text-[#1E90FF]">
-                {selectedUsers.length === employees.length && employees.length ? "Deselect All" : "Select All"}
+                {selectedUsers.length === people.length && people.length ? "Deselect All" : "Select All"}
               </button>
             </div>
             <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-50">
-              {employees.map((emp) => (
-                <label key={emp.id} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
+              {people.map((p) => (
+                <label key={p._id} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
                   <Checkbox
-                    checked={selectedUsers.includes(emp.id)}
-                    onCheckedChange={() => toggleUser(emp.id)}
+                    checked={selectedUsers.includes(p._id)}
+                    onCheckedChange={() => toggleUser(p._id)}
                     className="data-[state=checked]:bg-[#0047AB] data-[state=checked]:border-[#0047AB]"
                   />
                   <div>
-                    <div className="text-sm font-semibold text-gray-800">{emp.name ?? "—"}</div>
-                    <div className="text-xs text-gray-400">{emp.email}</div>
+                    <div className="text-sm font-semibold text-gray-800">{p.name ?? "—"}</div>
+                    <div className="text-xs text-gray-400">{p.email}</div>
                   </div>
                 </label>
               ))}
-              {employees.length === 0 && (
+              {people.length === 0 && (
                 <div className="px-3 py-4 text-center text-sm text-gray-400">No employees found</div>
               )}
             </div>
@@ -164,23 +157,44 @@ function AssignModal({
 }
 
 export default function LMSAssignments() {
-  const { role, setRole, user } = useLMS();
+  const { role, setRole } = useLMS();
   const [showModal, setShowModal] = useState(false);
-  const [enrollments, setEnrollments] = useState<MockEnrollment[]>(enrollmentsStore);
+  const [enrollments, setEnrollments] = useState<EnrollmentRecord[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [people, setPeople] = useState<CompanyPerson[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const companyId = (user as any)?.companyId ?? 0;
-  const employees = MOCK_EMPLOYEES;
-  const courses = MOCK_COURSES;
+  const loadAll = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const [enrollRes, courseRes, peopleRes] = await Promise.all([
+        getEnrollments(),
+        getCourses(),
+        getCompanyPeople({ role: "user" }),
+      ]);
+      setEnrollments(enrollRes.data);
+      setCourses(courseRes.data);
+      setPeople(peopleRes.data);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't load assignments.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
 
   const employeeById = useMemo(() => {
-    const map = new Map<number, { name: string | null; email: string | null }>();
-    employees.forEach((e) => map.set(e.id, { name: e.name, email: e.email }));
+    const map = new Map<string, { name: string; email: string }>();
+    people.forEach((p) => map.set(p._id, { name: p.name, email: p.email }));
     return map;
-  }, [employees]);
+  }, [people]);
 
   const courseById = useMemo(() => {
-    const map = new Map<number, string>();
-    courses.forEach((c) => map.set(c.id, c.title));
+    const map = new Map<string, string>();
+    courses.forEach((c) => map.set(c._id, c.title));
     return map;
   }, [courses]);
 
@@ -198,9 +212,7 @@ export default function LMSAssignments() {
       role={role}
       onRoleChange={setRole}
     >
-      {companyId > 0 && (
-        <AssignModal companyId={companyId} open={showModal} onClose={() => setShowModal(false)} onAssigned={() => setEnrollments([...enrollmentsStore])} />
-      )}
+      <AssignModal courses={courses} people={people} open={showModal} onClose={() => setShowModal(false)} onAssigned={loadAll} />
 
       <CourseSectionTabs active="assignments" />
 
@@ -233,7 +245,9 @@ export default function LMSAssignments() {
         </div>
 
         {/* Enrollments Table */}
-        {enrollments.length > 0 ? (
+        {isLoading ? (
+          <div className="flex items-center justify-center py-20 text-white/40"><Loader2 className="animate-spin" size={24} /></div>
+        ) : enrollments.length > 0 ? (
           <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
             <Table>
               <TableHeader>
@@ -250,7 +264,7 @@ export default function LMSAssignments() {
                   const employee = employeeById.get(e.userId);
                   const courseTitle = courseById.get(e.courseId);
                   return (
-                    <TableRow key={e.id} className="border-gray-50">
+                    <TableRow key={e._id} className="border-gray-50">
                       <TableCell className="px-5 py-3">
                         <div className="flex items-center gap-2.5">
                           <Avatar className="size-7">

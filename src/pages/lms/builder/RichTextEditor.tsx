@@ -41,7 +41,7 @@ import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { mockUploadFile } from "../mockData";
+import { uploadCourseFile, ApiError } from "@/lib/api";
 
 // ─── Custom FontSize mark ───────────────────────────────────────────────────
 // Tiptap doesn't ship an official exact-size mark — this is the standard,
@@ -213,24 +213,14 @@ export function RichTextEditor({ value, onChange, placeholder = "Enter your cont
         setUploadError("Please select an image file.");
         return;
       }
-      if (file.size > 10 * 1024 * 1024) {
-        setUploadError("Image must be under 10 MB.");
-        return;
-      }
       setUploadError(null);
       setUploadingImage(true);
       try {
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-        const result = await mockUploadFile({ base64, filename: file.name, mimeType: file.type, folder: "text-images" });
+        const result = await uploadCourseFile(file, "lesson-media");
         editor?.chain().focus().setImage({ src: result.url, alt: file.name }).run();
         setImagePopoverOpen(false);
-      } catch {
-        setUploadError("Upload failed. Please try again.");
+      } catch (err) {
+        setUploadError(err instanceof ApiError ? err.message : "Upload failed. Please try again.");
       } finally {
         setUploadingImage(false);
       }

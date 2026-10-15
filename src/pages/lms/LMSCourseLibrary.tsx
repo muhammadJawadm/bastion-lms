@@ -3,17 +3,16 @@
  * the company. Deliberately separate from "Courses" (My Courses) in
  * naming, breadcrumb, content, and actions per the Company Admin redesign
  * brief — this page is read-mostly; the only write action is "Add to
- * Company", which copies a library course into the company's own
- * coursesStore via the existing addCourse() helper.
+ * Company", which calls `POST /courses/library/:id/add-to-company`.
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { Search, BookOpen, Clock, CheckCircle2, Library, Filter, Loader2, Eye, Award, GraduationCap } from "lucide-react";
 import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
 import { toast } from "sonner";
-import { coursesStore, addCourse, MOCK_COURSE_LIBRARY, type MockCourse } from "./mockData";
+import { getCourseLibrary, addLibraryCourseToCompany, ApiError, type Course } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,7 +42,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 function LibraryCard({ course, alreadyAdded, onAdd, onPreview, isAdding }: {
-  course: MockCourse;
+  course: Course;
   alreadyAdded: boolean;
   onAdd: () => void;
   onPreview: () => void;
@@ -56,7 +55,7 @@ function LibraryCard({ course, alreadyAdded, onAdd, onPreview, isAdding }: {
           <Library size={18} className="text-[#1E90FF]" />
         </div>
         <Badge className="border-transparent text-[10px] font-bold uppercase tracking-wide bg-white/10 text-white/60">
-          {CATEGORY_LABELS[course.category] ?? course.category}
+          {(course.category && CATEGORY_LABELS[course.category]) ?? course.category ?? "Other"}
         </Badge>
       </div>
       <div>
@@ -98,7 +97,7 @@ function LibraryCard({ course, alreadyAdded, onAdd, onPreview, isAdding }: {
 // ─── Preview Modal ────────────────────────────────────────────────────────────
 
 function PreviewModal({ course, alreadyAdded, onAdd, isAdding, onClose }: {
-  course: MockCourse;
+  course: Course;
   alreadyAdded: boolean;
   onAdd: () => void;
   isAdding: boolean;
@@ -109,7 +108,7 @@ function PreviewModal({ course, alreadyAdded, onAdd, isAdding, onClose }: {
       <DialogContent className="sm:max-w-lg rounded-2xl p-0 gap-0">
         <DialogHeader className="p-6 pb-4 border-b border-gray-100 text-left">
           <Badge className="w-fit mb-2 border-transparent text-[10px] font-bold uppercase tracking-wide bg-[#0047AB]/10 text-[#0047AB]">
-            {CATEGORY_LABELS[course.category] ?? course.category}
+            {(course.category && CATEGORY_LABELS[course.category]) ?? course.category ?? "Other"}
           </Badge>
           <DialogTitle className="font-display font-bold text-[#0F1C2E] text-xl uppercase">{course.title}</DialogTitle>
         </DialogHeader>
@@ -153,42 +152,58 @@ function PreviewModal({ course, alreadyAdded, onAdd, isAdding, onClose }: {
 }
 
 export default function LMSCourseLibrary() {
-  const { role, setRole } = useLMS();
+  const { role, setRole, effectiveCompanyId, user } = useLMS();
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterDuration, setFilterDuration] = useState<DurationFilter>("all");
-  const [addingId, setAddingId] = useState<number | null>(null);
-  const [previewCourse, setPreviewCourse] = useState<MockCourse | null>(null);
-  const [companyTitles, setCompanyTitles] = useState<string[]>(() => coursesStore.map((c) => c.title));
+  const [addingId, setAddingId] = useState<string | null>(null);
+  const [previewCourse, setPreviewCourse] = useState<Course | null>(null);
+  const [library, setLibrary] = useState<Course[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadLibrary = useCallback(async () => {
+    if (!effectiveCompanyId) {
+      setLibrary([]);
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const res = await getCourseLibrary();
+      setLibrary(res.data);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't load the course library.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [effectiveCompanyId]);
+
+  useEffect(() => {
+    loadLibrary();
+  }, [loadLibrary]);
 
   const filtered = useMemo(() => {
-    return MOCK_COURSE_LIBRARY.filter((c) => {
+    return library.filter((c) => {
       const q = search.toLowerCase();
-      const matchSearch = c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
+      const matchSearch = c.title.toLowerCase().includes(q) || (c.description ?? "").toLowerCase().includes(q);
       const matchCat = filterCategory === "all" || c.category === filterCategory;
-      const matchDuration = matchesDuration(c.durationMinutes, filterDuration);
+      const matchDuration = matchesDuration(c.durationMinutes ?? 0, filterDuration);
       return matchSearch && matchCat && matchDuration;
     });
-  }, [search, filterCategory, filterDuration]);
+  }, [library, search, filterCategory, filterDuration]);
 
-  function handleAdd(course: MockCourse) {
-    setAddingId(course.id);
-    setTimeout(() => {
-      addCourse({
-        title: course.title,
-        description: course.description,
-        status: "draft",
-        category: course.category,
-        durationMinutes: course.durationMinutes,
-        issuesCertificate: course.issuesCertificate,
-        coverImageUrl: course.coverImageUrl,
-        lessonCount: course.lessonCount,
-        enrollmentCount: 0,
-      });
-      setCompanyTitles((prev) => [...prev, course.title]);
-      setAddingId(null);
+  async function handleAdd(course: Course) {
+    if (!effectiveCompanyId || !user?.id) return;
+    setAddingId(course._id);
+    try {
+      await addLibraryCourseToCompany(course._id);
+      await loadLibrary();
       toast.success(`"${course.title}" added to your Courses as a draft`);
-    }, 450);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't add that course.");
+    } finally {
+      setAddingId(null);
+    }
   }
 
   return (
@@ -249,21 +264,27 @@ export default function LMSCourseLibrary() {
         {previewCourse && (
           <PreviewModal
             course={previewCourse}
-            alreadyAdded={companyTitles.includes(previewCourse.title)}
-            isAdding={addingId === previewCourse.id}
+            alreadyAdded={!!previewCourse.added}
+            isAdding={addingId === previewCourse._id}
             onAdd={() => handleAdd(previewCourse)}
             onClose={() => setPreviewCourse(null)}
           />
         )}
 
-        {filtered.length > 0 ? (
+        {isLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="h-48 rounded-xl bg-white/5 animate-pulse" />
+            ))}
+          </div>
+        ) : filtered.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filtered.map((course) => (
               <LibraryCard
-                key={course.id}
+                key={course._id}
                 course={course}
-                alreadyAdded={companyTitles.includes(course.title)}
-                isAdding={addingId === course.id}
+                alreadyAdded={!!course.added}
+                isAdding={addingId === course._id}
                 onAdd={() => handleAdd(course)}
                 onPreview={() => setPreviewCourse(course)}
               />

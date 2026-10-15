@@ -964,7 +964,7 @@ export function DragDropViewer({ data, onAnswer, answered: externalAnswered }: D
               onDrop={(e) => handleDrop(e, blankIdx)}
               onClick={() => handleBlankTap(blankIdx)}
               className={cn(
-                "inline-flex items-center justify-center min-w-[80px] h-9 px-3 rounded-md border-2 border-dashed cursor-pointer transition-all text-sm font-medium",
+                "inline-flex items-center justify-center min-w-20 h-9 px-3 rounded-md border-2 border-dashed cursor-pointer transition-all text-sm font-medium",
                 !isAnswered && !placedWord && "border-blue-400 bg-blue-400/10 text-gray-400 hover:bg-blue-400/20",
                 !isAnswered && placedWord && "border-blue-500 bg-blue-500/20 text-black",
                 isAnswered && correct && "border-green-500 bg-green-500/20 text-green-300 border-solid",
@@ -980,7 +980,7 @@ export function DragDropViewer({ data, onAnswer, answered: externalAnswered }: D
       {/* Word bank */}
       <div>
         <p className="text-xs text-gray-400 mb-2 uppercase tracking-wide">Word Bank</p>
-        <div className="flex flex-wrap gap-2 min-h-[40px] p-2 rounded-lg bg-[#1a1f35] border border-gray-600">
+        <div className="flex flex-wrap gap-2 min-h-10 p-2 rounded-lg bg-[#1a1f35] border border-gray-600">
           {bankWords.map((word, i) => (
             <div
               key={`${word}-${i}`}
