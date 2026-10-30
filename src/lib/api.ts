@@ -898,3 +898,131 @@ export async function uploadCourseFile(
     sizeBytes: file.size,
   });
 }
+
+// ─── Billing ────────────────────────────────────────────────────────────────
+// Real Stripe integration — hosted Checkout + Billing Portal only, never a
+// custom card form. Every endpoint here is scoped to the caller's own
+// company via the JWT, same as the rest of the API.
+
+export interface BillingPlan {
+  _id: string;
+  name: string;
+  description?: string;
+  features: string[];
+  monthlyPriceId: string;
+  annualPriceId: string;
+  perSeatPriceId: string;
+  /** null = uncapped. */
+  seatLimit: number | null;
+}
+
+export type BillingInterval = "monthly" | "annual" | "perSeat";
+
+export type BillingStatus =
+  | "trialing" | "active" | "past_due" | "canceled"
+  | "incomplete" | "incomplete_expired" | "unpaid";
+
+export interface BillingSubscription {
+  stripeCustomerId: string;
+  /** Populated — the full Plan object, not just an id. */
+  planId: BillingPlan | null;
+  status: BillingStatus;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  seatLimit: number | null;
+  /** Confirmed always "charge_automatically" for this product — present but nothing branches on it. */
+  collectionMethod?: string;
+}
+
+export interface BillingInvoice {
+  number: string;
+  amountDue: number;
+  amountPaid: number;
+  currency: string;
+  status: "paid" | "open" | "void" | "uncollectible" | "draft";
+  dueDate: string | null;
+  paidAt: string | null;
+  hostedInvoiceUrl: string;
+  pdfUrl: string;
+}
+
+export interface BillingPaymentMethod {
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+  bankName?: string;
+  isDefault: boolean;
+}
+
+export function getBillingPlans() {
+  return apiFetch<Envelope<BillingPlan[]>>("/billing/plans");
+}
+
+/** `data` is null when the company hasn't subscribed yet — show the Plans screen. */
+export function getMyBilling() {
+  return apiFetch<{ data: BillingSubscription | null }>("/billing/me");
+}
+
+/**
+ * Called from the Checkout success page with the `session_id` from the
+ * redirect URL. Actively fetches the truth from Stripe and updates the DB
+ * synchronously (unlike `getMyBilling`, which just reads whatever the
+ * webhook has landed so far) — use this response directly instead of also
+ * calling `getMyBilling` right after, same shape, already fresh.
+ */
+export function confirmCheckoutSession(sessionId: string) {
+  return apiFetch<Envelope<BillingSubscription>>(`/billing/confirm/${sessionId}`);
+}
+
+/**
+ * Starts a hosted Checkout session — redirect the browser to the returned
+ * url (`window.location.href = url`), never render a card form.
+ * `seatQuantity` only applies when `interval === "perSeat"`; a value over
+ * the plan's seatLimit is rejected with a 400 ("This plan allows at most
+ * <n> seats").
+ */
+export function createCheckoutSession(input: { planId: string; interval: BillingInterval; seatQuantity?: number }) {
+  return apiFetch<Envelope<{ url: string }>>("/billing/checkout-session", { method: "POST", body: input });
+}
+
+/** Starts a Billing Portal session — redirect the browser to the returned url. Card updates, invoice downloads, and self-service cancellation all happen there. */
+export function createPortalSession() {
+  return apiFetch<Envelope<{ url: string }>>("/billing/portal-session", { method: "POST" });
+}
+
+/** Cancels at period end, not immediately. */
+export function cancelBillingSubscription() {
+  return apiFetch<Envelope<BillingSubscription>>("/billing/cancel", { method: "POST" });
+}
+
+export function getMyInvoices() {
+  return apiFetch<Envelope<BillingInvoice[]>>("/billing/me/invoices");
+}
+
+/** Read-only — actual payment method changes happen in the Billing Portal. */
+export function getMyPaymentMethods() {
+  return apiFetch<Envelope<BillingPaymentMethod[]>>("/billing/me/payment-methods");
+}
+
+// ─── Notifications ──────────────────────────────────────────────────────────
+// Response shape isn't backed by a shared collection/spec — built from the
+// backend dev's description (fires billing success/failure/renewal, plus
+// existing alerts like form assignments). Confirm field names if anything
+// here doesn't match what the bell actually renders.
+
+export interface NotificationRecord {
+  _id: string;
+  title: string;
+  message?: string;
+  type?: string;
+  read: boolean;
+  /** Optional in-app deep link, e.g. "/lms/billing". */
+  link?: string;
+  createdAt: string;
+}
+
+/** Per the backend: fetching marks them read as a side effect. */
+export function getNotifications() {
+  return apiFetch<Envelope<NotificationRecord[]>>("/notifications");
+}

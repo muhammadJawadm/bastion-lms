@@ -136,7 +136,7 @@ function PlatformAdminDashboard() {
                 <TableRow key={company.id} className="border-gray-50">
                   <TableCell className="px-6 py-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-[#0F1C2E]/10 flex items-center justify-center flex-shrink-0">
+                      <div className="w-8 h-8 rounded-lg bg-[#0F1C2E]/10 flex items-center justify-center shrink-0">
                         <Building2 className="w-4 h-4 text-[#0F1C2E]" />
                       </div>
                       <div>
@@ -318,7 +318,7 @@ function ClientAdminDashboard() {
             <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-full bg-[#00A3FF]" /><span className="text-gray-500">Completed</span></div>
           </div>
         </div>
-        {isLoading ? <Skeleton className="h-[200px] w-full rounded-lg" /> : (
+        {isLoading ? <Skeleton className="h-50 w-full rounded-lg" /> : (
           <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={trendData}>
               <defs>
@@ -359,7 +359,7 @@ function ClientAdminDashboard() {
           <div className="divide-y divide-gray-50">
             {overdue.slice(0, 5).map((e) => (
               <div key={e._id} className="flex items-center gap-3 px-6 py-3 hover:bg-gray-50 transition-colors">
-                <div className="w-8 h-8 rounded-full bg-[#0047AB]/10 flex items-center justify-center flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-[#0047AB]/10 flex items-center justify-center shrink-0">
                   <span className="text-[#1E90FF] text-xs font-bold">
                     {getEmployeeName(e.userId).slice(0, 2).toUpperCase()}
                   </span>
@@ -368,7 +368,7 @@ function ClientAdminDashboard() {
                   <div className="text-sm font-semibold text-gray-800 truncate">{getEmployeeName(e.userId)}</div>
                   <div className="text-xs text-gray-400">{getCourseTitle(e.courseId)}</div>
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
+                <div className="flex items-center gap-1 shrink-0">
                   <Clock className="w-3.5 h-3.5 text-[#1E90FF]" />
                   <span className="text-xs font-bold text-[#1E90FF]">Overdue</span>
                 </div>
@@ -494,9 +494,9 @@ function EmployeeDashboard() {
                     <div className="flex items-start justify-between gap-2 mb-1">
                       <div className="text-sm font-bold text-gray-800 leading-tight">{courseById.get(e.courseId)?.title ?? `Course #${e.courseId}`}</div>
                       {e.status === "completed" ? (
-                        <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
+                        <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" />
                       ) : e.dueDate ? (
-                        <Badge className="bg-[#0047AB]/10 text-[#1E90FF] border-transparent text-[10px] font-bold flex-shrink-0">
+                        <Badge className="bg-[#0047AB]/10 text-[#1E90FF] border-transparent text-[10px] font-bold shrink-0">
                           Due {new Date(e.dueDate).toLocaleDateString()}
                         </Badge>
                       ) : null}
@@ -539,7 +539,7 @@ function EmployeeDashboard() {
           <div className="space-y-3">
             {certificates.map((cert) => (
               <div key={cert._id} className="flex items-center gap-3 p-3 bg-[#F4F6F9] rounded-lg">
-                <Award className="w-8 h-8 text-[#1E90FF] flex-shrink-0" />
+                <Award className="w-8 h-8 text-[#1E90FF] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-bold text-gray-800">{cert.certificateTitle || `Certificate #${cert.certificateNumber ?? ""}`}</div>
                   <div className="text-xs text-gray-400">
@@ -551,7 +551,7 @@ function EmployeeDashboard() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-xs text-[#1E90FF] font-semibold hover:text-[#1E90FF] hover:bg-[#1E90FF]/5 flex-shrink-0"
+                  className="text-xs text-[#1E90FF] font-semibold hover:text-[#1E90FF] hover:bg-[#1E90FF]/5 shrink-0"
                   onClick={() => toast.info("Certificate download coming soon")}
                 >
                   Download
@@ -581,7 +581,7 @@ export default function LMSDashboard() {
       {/* Demo account banner */}
       {isDemo && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 mb-6 flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
           <div>
             <p className="text-amber-800 font-semibold text-sm">You're on a Demo Account</p>
             <p className="text-amber-700 text-sm mt-0.5">

@@ -40,6 +40,7 @@ import LMSAdminQuestions from "./pages/lms/admin/LMSAdminQuestions";
 import LMSAdminConversations from "./pages/lms/admin/LMSAdminConversations";
 import LMSAdminAnalytics from "./pages/lms/admin/LMSAdminAnalytics";
 import LMSBilling from "./pages/lms/LMSBilling";
+import LMSBillingSuccess from "./pages/lms/LMSBillingSuccess";
 import LMSCourseBuilder from "./pages/lms/LMSCourseBuilder";
 import LMSCourseLibrary from "./pages/lms/LMSCourseLibrary";
 import LMSForms from "./pages/lms/LMSForms";
@@ -95,6 +96,7 @@ function Router() {
       <Route path="/lms/clients" component={LMSClients} />
       <Route path="/lms/settings" component={LMSSettings} />
       <Route path="/lms/billing" component={LMSBilling} />
+      <Route path="/lms/billing/success" component={LMSBillingSuccess} />
       <Route path="/lms/my-training" component={LMSMyTraining} />
       <Route path="/lms/about" component={LMSAbout} />
       <Route path="/lms/demo/employee" component={LMSDemoEmployee} />

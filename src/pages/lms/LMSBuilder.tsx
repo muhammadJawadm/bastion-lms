@@ -1590,7 +1590,7 @@ export default function LMSBuilder() {
                 {activeBlock ? (
                   <div className={cn(
                     "mx-auto py-6 px-4 transition-all duration-300",
-                    previewDevice === "mobile" ? "max-w-[390px]" : "max-w-3xl px-8"
+                    previewDevice === "mobile" ? "max-w-97.5" : "max-w-3xl px-8"
                   )}>
                     {/* Canvas toolbar shown above canvas_slide blocks */}
                     {activeBlock.type === "canvas_slide" && (

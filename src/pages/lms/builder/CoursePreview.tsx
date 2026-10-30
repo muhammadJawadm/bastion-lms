@@ -92,7 +92,7 @@ export function CoursePreview({ courseName, lessonTitle, blocks, isDirty, onClos
           {/* Content area */}
           <div className={cn(
             "bg-white overflow-auto shadow-2xl",
-            device === "mobile" ? "rounded-b-3xl border border-gray-700 border-t-0 max-h-[700px]" : "rounded-b-xl border border-gray-300 border-t-0 max-h-[700px]"
+            device === "mobile" ? "rounded-b-3xl border border-gray-700 border-t-0 max-h-175" : "rounded-b-xl border border-gray-300 border-t-0 max-h-175"
           )}>
             {/* LMS lesson header */}
             <div className="bg-[#0F1C2E] px-6 py-4">

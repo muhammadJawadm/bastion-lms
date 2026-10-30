@@ -1,6 +1,6 @@
 
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard,
@@ -26,6 +26,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { getNotifications, type NotificationRecord } from "@/lib/api";
 
 import logo from "../../../public/logo.png"
 import logo1 from "../../../public/logo1.png"
@@ -138,7 +140,7 @@ function SidebarContent({
                     : "text-white/75 hover:text-white hover:bg-white/8"
                 )}
               >
-                <Icon className={cn("w-4 h-4 flex-shrink-0 transition-colors", isActive ? "text-white" : "text-white/65 group-hover:text-[#1E90FF]")} />
+                <Icon className={cn("w-4 h-4 shrink-0 transition-colors", isActive ? "text-white" : "text-white/65 group-hover:text-[#1E90FF]")} />
                 {!collapsed && <span className="flex-1">{item.label}</span>}
               </div>
             </Link>
@@ -161,7 +163,7 @@ function SidebarContent({
       {/* User Profile */}
       <div className="px-4 py-4 border-t border-white/10">
         <div className={cn("flex items-center gap-3", collapsed && "justify-center")}>
-          <Avatar className="size-8 ring-1 ring-white/10 flex-shrink-0">
+          <Avatar className="size-8 ring-1 ring-white/10 shrink-0">
             <AvatarFallback className="bg-[#0047AB] text-white text-xs font-bold">{initials}</AvatarFallback>
           </Avatar>
           {!collapsed && (
@@ -195,6 +197,79 @@ function SidebarContent({
 
 // ─── Top Bar ──────────────────────────────────────────────────────────────────
 
+// ─── Notification bell ────────────────────────────────────────────────────────
+// Fetches on mount (so the unread badge is right from the first paint) and
+// again every time the dropdown opens (to pick up anything new since then).
+// Per the backend, each fetch's response reflects read state as of that
+// call, then flips everything to read server-side for next time.
+
+function NotificationBell() {
+  const [, navigate] = useLocation();
+  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await getNotifications();
+      setNotifications(res.data);
+    } catch {
+      // Silent — a broken notification feed shouldn't block the rest of the app.
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const unreadCount = notifications.filter((n) => !n.read).length;
+
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (o) load(); }}>
+      <PopoverTrigger asChild>
+        <button className="relative p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
+          <Bell className="w-4 h-4" />
+          {unreadCount > 0 && (
+            <span className="absolute top-1 right-1 min-w-[14px] h-[14px] px-0.5 flex items-center justify-center bg-[#0047AB] rounded-full ring-2 ring-[#0F1C2E] text-[9px] font-bold text-white leading-none">
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-0 max-h-96 overflow-y-auto">
+        <div className="px-4 py-3 border-b border-gray-100">
+          <span className="font-display font-bold text-[#0F1C2E] text-sm">Notifications</span>
+        </div>
+        {isLoading && notifications.length === 0 ? (
+          <div className="p-6 text-center text-gray-400 text-sm">Loading…</div>
+        ) : notifications.length === 0 ? (
+          <div className="p-6 text-center text-gray-400 text-sm">You're all caught up.</div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {notifications.map((n) => (
+              <button
+                key={n._id}
+                onClick={() => { setOpen(false); if (n.link) navigate(n.link); }}
+                className={cn(
+                  "w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors",
+                  !n.read && "bg-blue-50/60"
+                )}
+              >
+                <p className="text-sm font-semibold text-gray-800">{n.title}</p>
+                {n.message && <p className="text-xs text-gray-500 mt-0.5">{n.message}</p>}
+                <p className="text-[10px] text-gray-400 mt-1">{new Date(n.createdAt).toLocaleString()}</p>
+              </button>
+            ))}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function TopBar({
   title,
   breadcrumbs,
@@ -211,7 +286,7 @@ function TopBar({
   const initials = getInitials(userName);
 
   return (
-    <header className="h-14 bg-[#0F1C2E]/95 backdrop-blur border-b border-white/10 flex items-center px-4 lg:px-6 gap-4 flex-shrink-0">
+    <header className="h-14 bg-[#0F1C2E]/95 backdrop-blur border-b border-white/10 flex items-center px-4 lg:px-6 gap-4 shrink-0">
       <button onClick={onOpenMobileMenu} className="lg:hidden text-white/70 hover:text-white transition-colors -ml-1 p-1.5">
         <Menu className="w-5 h-5" />
       </button>
@@ -219,7 +294,7 @@ function TopBar({
       <div className="flex items-center gap-1.5 text-sm flex-1 min-w-0">
         {breadcrumbs?.map((crumb, i) => (
           <span key={i} className="flex items-center gap-1.5 min-w-0">
-            {i > 0 && <ChevronRight className="w-3.5 h-3.5 text-white/30 flex-shrink-0" />}
+            {i > 0 && <ChevronRight className="w-3.5 h-3.5 text-white/30 shrink-0" />}
             {crumb.href ? (
               <Link href={crumb.href}>
                 <span className="text-white/70 hover:text-[#1E90FF] cursor-pointer transition-colors truncate">{crumb.label}</span>
@@ -242,15 +317,7 @@ function TopBar({
           <LogOut className="w-3.5 h-3.5" />
           {isAuthenticated ? "Sign Out" : "Sign In"}
         </Button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button className="relative p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-              <Bell className="w-4 h-4" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#0047AB] rounded-full ring-2 ring-[#0F1C2E]" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Notifications</TooltipContent>
-        </Tooltip>
+        <NotificationBell />
         <Avatar className="size-8 ring-1 ring-white/10">
           <AvatarFallback className="bg-[#0047AB] text-white text-xs font-bold">{initials}</AvatarFallback>
         </Avatar>
@@ -279,7 +346,7 @@ export function LMSLayout({ children, title, breadcrumbs }: LMSLayoutProps) {
   return (
     <div className="lms-interface flex h-screen bg-[#0F1C2E] overflow-hidden font-sans">
       {/* Desktop Sidebar */}
-      <div className={cn("hidden lg:flex lg:flex-shrink-0 border-r border-white/10 transition-all duration-200", desktopCollapsed ? "lg:w-18" : "lg:w-64")}>
+      <div className={cn("hidden lg:flex lg:shrink-0 border-r border-white/10 transition-all duration-200", desktopCollapsed ? "lg:w-18" : "lg:w-64")}>
         <SidebarContent
           userName={user?.name}
           isAuthenticated={isAuthenticated}

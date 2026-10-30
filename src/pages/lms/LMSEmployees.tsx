@@ -71,6 +71,21 @@ function generateTempPassword(): string {
   return out;
 }
 
+function isSeatLimitError(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 403 && /seat limit/i.test(err.message);
+}
+
+/** Seat-limit 403s get an "Upgrade Plan" action straight to Billing instead of a plain error. */
+function showCreateUserError(err: unknown, fallback: string) {
+  if (isSeatLimitError(err)) {
+    toast.error(err.message, {
+      action: { label: "Upgrade Plan", onClick: () => { window.location.href = "/lms/billing"; } },
+    });
+    return;
+  }
+  toast.error(err instanceof ApiError ? err.message : fallback);
+}
+
 /** A single-line credential value with a copy-to-clipboard button. */
 function CopyField({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
@@ -141,7 +156,7 @@ function CreateUserModal({ open, onClose, onCreated }: {
       setCreated({ email, password: tempPassword });
       toast.success(`Account created — login details emailed to ${email}`);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Couldn't create the account.");
+      showCreateUserError(err, "Couldn't create the account.");
     } finally {
       setIsPending(false);
     }
@@ -271,6 +286,7 @@ function CSVUploadModal({ open, onClose, onImported }: {
     const created: CompanyPerson[] = [];
     const creds: { email: string; password: string }[] = [];
     let failures = 0;
+    let stoppedForSeatLimit = false;
     for (const p of parsed) {
       const password = generateTempPassword();
       try {
@@ -284,8 +300,13 @@ function CSVUploadModal({ open, onClose, onImported }: {
         });
         created.push(res.data);
         creds.push({ email: p.email, password });
-      } catch {
+      } catch (err) {
         failures++;
+        // Every remaining row will fail the same way once the seat cap is hit — stop instead of burning through the rest.
+        if (isSeatLimitError(err)) {
+          stoppedForSeatLimit = true;
+          break;
+        }
       }
     }
     setIsPending(false);
@@ -294,7 +315,13 @@ function CSVUploadModal({ open, onClose, onImported }: {
       setCreatedCreds(creds);
       setCsvText("");
     }
-    if (failures > 0) toast.error(`${failures} row${failures !== 1 ? "s" : ""} failed to import`);
+    if (stoppedForSeatLimit) {
+      toast.error(`Stopped after ${created.length} — seat limit reached.`, {
+        action: { label: "Upgrade Plan", onClick: () => { window.location.href = "/lms/billing"; } },
+      });
+    } else if (failures > 0) {
+      toast.error(`${failures} row${failures !== 1 ? "s" : ""} failed to import`);
+    }
     if (created.length > 0) toast.success(`Created ${created.length} employee account${created.length !== 1 ? "s" : ""}`);
   };
 
