@@ -176,8 +176,16 @@ export default function LMSFormBuilder() {
     if (!formId) { setIsLoading(false); return; }
     try {
       const res = await getFormById(formId);
-      setForm(res.data);
-      setActivePageId((prev) => prev || res.data.pages?.[0]?._id || "");
+      let loaded = res.data;
+      // A brand-new form has no pages yet (the backend doesn't auto-create
+      // one on POST /forms) — without this, `activePage` below never
+      // resolves and the builder incorrectly shows "Form not found".
+      if (!loaded.pages || loaded.pages.length === 0) {
+        const pageRes = await addFormPage(loaded._id, { title: "Page 1" });
+        loaded = { ...loaded, pages: [pageRes.data] };
+      }
+      setForm(loaded);
+      setActivePageId((prev) => prev || loaded.pages?.[0]?._id || "");
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Couldn't load this form.");
     } finally {

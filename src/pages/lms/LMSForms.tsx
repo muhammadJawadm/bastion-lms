@@ -8,14 +8,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import {
   ClipboardCheck, Plus, Search, Loader2, MoreHorizontal, Pencil, Copy, Trash2,
-  Eye, FileText, Globe, Lock, User, Calendar, MessageSquare,
+  Eye, FileText, Globe, Lock, User, Calendar, MessageSquare, UserPlus,
 } from "lucide-react";
 import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
 import { toast } from "sonner";
 import {
   getForms, createForm, updateForm, deleteForm, getFormById, getFormResponses,
-  ApiError, type FormRecord, type FormResponseRecord, type FormFieldRecord,
+  createFormAssignment, getCompanyPeople,
+  ApiError, type FormRecord, type FormResponseRecord, type FormFieldRecord, type CompanyPerson,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -249,6 +250,87 @@ function ResponsesModal({ form, onClose }: { form: FormRecord; onClose: () => vo
   );
 }
 
+// ─── Assign Form Modal ────────────────────────────────────────────────────────
+
+function AssignFormModal({ form, onClose }: { form: FormRecord; onClose: () => void }) {
+  const [people, setPeople] = useState<CompanyPerson[]>([]);
+  const [isLoadingPeople, setIsLoadingPeople] = useState(true);
+  const [userId, setUserId] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [isPending, setIsPending] = useState(false);
+
+  useEffect(() => {
+    getCompanyPeople({ role: "user" })
+      .then((res) => setPeople(res.data))
+      .catch((err) => toast.error(err instanceof ApiError ? err.message : "Couldn't load employees."))
+      .finally(() => setIsLoadingPeople(false));
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId) { toast.error("Select an employee to assign this form to."); return; }
+    if (!dueDate) { toast.error("Set a due date."); return; }
+    setIsPending(true);
+    try {
+      await createFormAssignment({ formId: form._id, userId, dueDate: new Date(dueDate).toISOString() });
+      toast.success("Form assigned — the employee has been notified.");
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't assign the form.");
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-lg rounded-2xl p-0 gap-0">
+        <DialogHeader className="p-6 pb-4 border-b border-gray-100 text-left">
+          <DialogTitle className="font-display font-bold text-[#0F1C2E] text-xl uppercase">Assign “{form.title}”</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {form.status === "draft" && (
+            <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              This form is still a draft. Employees can't fill it in until it's published.
+            </p>
+          )}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Employee *</Label>
+            {isLoadingPeople ? (
+              <div className="flex items-center gap-2 text-gray-400 text-sm py-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading employees…</div>
+            ) : people.length === 0 ? (
+              <p className="text-sm text-gray-400">No employees found. Add one under Employees first.</p>
+            ) : (
+              <select
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                className="w-full h-10 rounded-lg border border-gray-200 px-3 text-sm focus:outline-none focus:border-[#0047AB] focus:ring-2 focus:ring-[#0047AB]/20"
+              >
+                <option value="">Select an employee…</option>
+                {people.map((p) => (
+                  <option key={p._id} value={p._id}>{p.name} ({p.email})</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Due Date *</Label>
+            <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="focus-visible:border-[#0047AB] focus-visible:ring-[#0047AB]/20" />
+          </div>
+          <DialogFooter className="pt-2 sm:justify-stretch">
+            <Button type="button" variant="outline" onClick={onClose} className="flex-1 h-auto py-3 border-gray-200 text-gray-600 font-bold text-sm uppercase tracking-wide">
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isPending || isLoadingPeople || people.length === 0} className="flex-1 h-auto py-3 bg-[#0047AB] hover:bg-[#1E90FF] text-white font-bold text-sm uppercase tracking-wide gap-2">
+              {isPending ? <><Loader2 size={14} className="animate-spin" /> Assigning...</> : "Assign Form"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function LMSForms() {
@@ -262,6 +344,7 @@ export default function LMSForms() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingForm, setEditingForm] = useState<FormRecord | null>(null);
   const [responsesForm, setResponsesForm] = useState<FormRecord | null>(null);
+  const [assignForm, setAssignForm] = useState<FormRecord | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
@@ -365,6 +448,7 @@ export default function LMSForms() {
       )}
       {editingForm && <EditFormModal form={editingForm} onClose={() => setEditingForm(null)} onSaved={() => { loadForms(); setEditingForm(null); }} />}
       {responsesForm && <ResponsesModal form={responsesForm} onClose={() => setResponsesForm(null)} />}
+      {assignForm && <AssignFormModal form={assignForm} onClose={() => setAssignForm(null)} />}
 
       <div className="space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -532,6 +616,9 @@ export default function LMSForms() {
                               <div className="absolute right-5 top-9 z-20 bg-white border border-gray-100 rounded-xl shadow-xl py-1 w-40">
                                 <button onClick={() => { setEditingForm(form); setOpenMenuId(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">
                                   <Pencil className="w-3.5 h-3.5" /> Edit
+                                </button>
+                                <button onClick={() => { setAssignForm(form); setOpenMenuId(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">
+                                  <UserPlus className="w-3.5 h-3.5" /> Assign to Employee
                                 </button>
                                 <button onClick={() => { setResponsesForm(form); setOpenMenuId(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">
                                   <Eye className="w-3.5 h-3.5" /> View Responses

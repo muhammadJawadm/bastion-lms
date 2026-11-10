@@ -533,6 +533,31 @@ export function getFormResponseById(formId: string, responseId: string) {
   return apiFetch<Envelope<FormResponseRecord>>(`/forms/${formId}/responses/${responseId}`);
 }
 
+// ─── Form Assignments ───────────────────────────────────────────────────────
+// Links a form to a person with a due date. Creating one sends the employee a
+// "New form assigned" notification server-side. `displayStatus` is the
+// backend's computed assigned/submitted/overdue value (overdue isn't stored,
+// it's derived from dueDate).
+
+export interface FormAssignmentRecord {
+  _id: string;
+  formId: string;
+  userId: string;
+  companyId?: string;
+  dueDate: string;
+  displayStatus?: "assigned" | "submitted" | "overdue";
+  submittedAt?: string;
+  createdAt?: string;
+}
+
+export function createFormAssignment(input: { formId: string; userId: string; dueDate: string }) {
+  return apiFetch<Envelope<FormAssignmentRecord>>("/form-assignments", { method: "POST", body: input });
+}
+
+export function getFormAssignments(params: { userId?: string; formId?: string } = {}) {
+  return apiFetch<Envelope<FormAssignmentRecord[]>>(`/form-assignments${buildQuery(params)}`);
+}
+
 // ─── Answer Sets ──────────────────────────────────────────────────────────────
 // Matches collection folder "7. Answer Sets" — reusable, org-wide option lists
 // a choice field can point at via `answerSetId` instead of inlining `options`.
@@ -603,6 +628,57 @@ export function updatePerson(id: string, input: Partial<{ name: string; departme
 
 export function deletePerson(id: string) {
   return apiFetch<{ message?: string }>(`/users/${id}`, { method: "DELETE" });
+}
+
+// ─── Company Settings ───────────────────────────────────────────────────────
+// Powers the Settings page's Company Profile / Branding / Notifications tabs.
+// Profile/Branding/Notifications PATCH routes require the client_admin role.
+
+export interface CompanyNotificationPrefs {
+  trainingDueReminders: boolean;
+  overdueTrainingAlerts: boolean;
+  courseCompletionNotifications: boolean;
+  certificateExpirationWarnings: boolean;
+  newCourseAssignments: boolean;
+  weeklyComplianceDigest: boolean;
+}
+
+export interface CompanyRecord {
+  _id: string;
+  name: string;
+  industry?: string;
+  contactName?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  city?: string;
+  state?: string;
+  logoUrl?: string;
+  primaryColor?: string;
+  accentColor?: string;
+  notifications?: Partial<CompanyNotificationPrefs>;
+  [key: string]: unknown;
+}
+
+export function getCompany(companyId: string) {
+  return apiFetch<Envelope<CompanyRecord>>(`/company/${companyId}`);
+}
+
+export function updateCompanyProfile(
+  companyId: string,
+  input: Partial<{ name: string; industry: string; contactName: string; contactEmail: string; contactPhone: string; city: string; state: string }>
+) {
+  return apiFetch<Envelope<CompanyRecord>>(`/company/${companyId}/profile`, { method: "PATCH", body: input });
+}
+
+export function updateCompanyBranding(
+  companyId: string,
+  input: Partial<{ logoUrl: string; primaryColor: string; accentColor: string }>
+) {
+  return apiFetch<Envelope<CompanyRecord>>(`/company/${companyId}/branding`, { method: "PATCH", body: input });
+}
+
+export function updateCompanyNotifications(companyId: string, input: Partial<CompanyNotificationPrefs>) {
+  return apiFetch<Envelope<CompanyRecord>>(`/company/${companyId}/notifications`, { method: "PATCH", body: input });
 }
 
 // ─── Enrollments ────────────────────────────────────────────────────────────
@@ -706,7 +782,7 @@ export function deleteCertificate(id: string) {
 
 export type UploadFolder =
   | "course-covers" | "lesson-media" | "form-media" | "signatures"
-  | "certificates" | "avatars" | "supporting-media";
+  | "certificates" | "avatars" | "supporting-media" | "company-logos";
 
 export interface UploadRecord {
   _id: string;

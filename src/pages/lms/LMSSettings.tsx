@@ -1,13 +1,14 @@
 /**
- * LMS Settings — Bastion LMS (UI Prototype)
- * Company Profile and Notifications are real, editable forms backed by
- * mock stores (companyStore / notificationPrefsStore). Branding is
- * plan-gated and Integrations/Security are disabled — those stay
- * read-only/tooltip-explained rather than faking editability.
+ * LMS Settings — Bastion LMS
+ * Company Profile, Branding, and Notifications are real, editable forms
+ * backed by the live backend (`GET/PATCH /company/:companyId/*`). Logo
+ * uploads go through the same Cloudinary proxy used elsewhere
+ * (`POST /uploads`, folder "company-logos"). Integrations and Security
+ * stay disabled/tooltip-explained — no backend support yet.
  */
 
-import { useState } from "react";
-import { Shield, Bell, Palette, Link2, Lock, Info, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Shield, Bell, Palette, Link2, Lock, Info, Loader2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useLMS } from "./LMSContext";
 import { LMSLayout } from "./LMSLayout";
@@ -25,13 +26,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  companyStore,
-  patchCompany,
-  notificationPrefsStore,
-  patchNotificationPrefs,
-  type MockCompany,
-  type MockNotificationPrefs,
-} from "./mockData";
+  getCompany,
+  updateCompanyProfile,
+  updateCompanyBranding,
+  updateCompanyNotifications,
+  uploadCourseFile,
+  ApiError,
+  type CompanyRecord,
+  type CompanyNotificationPrefs,
+} from "@/lib/api";
 
 const TABS = [
   { id: "company", label: "Company Profile", icon: Shield, disabled: false },
@@ -50,7 +53,7 @@ const INDUSTRY_OPTIONS = [
   { value: "other", label: "Other" },
 ];
 
-const NOTIFICATION_ITEMS: { key: keyof MockNotificationPrefs; label: string; desc: string }[] = [
+const NOTIFICATION_ITEMS: { key: keyof CompanyNotificationPrefs; label: string; desc: string }[] = [
   { key: "trainingDueReminders", label: "Training due reminders", desc: "Send employees reminders 7 days before due date" },
   { key: "overdueTrainingAlerts", label: "Overdue training alerts", desc: "Alert managers when training becomes overdue" },
   { key: "courseCompletionNotifications", label: "Course completion notifications", desc: "Notify managers when employees complete training" },
@@ -59,48 +62,199 @@ const NOTIFICATION_ITEMS: { key: keyof MockNotificationPrefs; label: string; des
   { key: "weeklyComplianceDigest", label: "Weekly compliance digest", desc: "Weekly summary report sent to administrators" },
 ];
 
+interface ProfileForm {
+  name: string;
+  industry: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+  city: string;
+  state: string;
+}
+
+interface BrandingForm {
+  logoUrl: string;
+  primaryColor: string;
+  accentColor: string;
+}
+
+const DEFAULT_PROFILE: ProfileForm = { name: "", industry: "other", contactName: "", contactEmail: "", contactPhone: "", city: "", state: "" };
+const DEFAULT_BRANDING: BrandingForm = { logoUrl: "", primaryColor: "#0047AB", accentColor: "#0F1C2E" };
+const DEFAULT_NOTIFICATIONS: CompanyNotificationPrefs = {
+  trainingDueReminders: true,
+  overdueTrainingAlerts: true,
+  courseCompletionNotifications: true,
+  certificateExpirationWarnings: true,
+  newCourseAssignments: true,
+  weeklyComplianceDigest: true,
+};
+
+function toProfileForm(c: CompanyRecord): ProfileForm {
+  return {
+    name: c.name ?? "",
+    industry: c.industry ?? "other",
+    contactName: c.contactName ?? "",
+    contactEmail: c.contactEmail ?? "",
+    contactPhone: c.contactPhone ?? "",
+    city: c.city ?? "",
+    state: c.state ?? "",
+  };
+}
+
+function toBrandingForm(c: CompanyRecord): BrandingForm {
+  return {
+    logoUrl: c.logoUrl ?? "",
+    primaryColor: c.primaryColor ?? DEFAULT_BRANDING.primaryColor,
+    accentColor: c.accentColor ?? DEFAULT_BRANDING.accentColor,
+  };
+}
+
+function toNotificationsForm(c: CompanyRecord): CompanyNotificationPrefs {
+  return { ...DEFAULT_NOTIFICATIONS, ...(c.notifications ?? {}) };
+}
+
 export default function LMSSettings() {
-  const { role, setRole } = useLMS();
+  const { role, setRole, effectiveCompanyId } = useLMS();
   const [activeTab, setActiveTab] = useState("company");
-  const isLoading = false;
+  const [isLoading, setIsLoading] = useState(true);
+  const [, setCompanyRecord] = useState<CompanyRecord | null>(null);
 
   // ── Company Profile form state ──
-  const [company, setCompany] = useState<MockCompany>({ ...companyStore });
+  const [profileSaved, setProfileSaved] = useState<ProfileForm>(DEFAULT_PROFILE);
+  const [profile, setProfile] = useState<ProfileForm>(DEFAULT_PROFILE);
   const [savingCompany, setSavingCompany] = useState(false);
-  const companyDirty = JSON.stringify(company) !== JSON.stringify(companyStore);
+  const companyDirty = JSON.stringify(profile) !== JSON.stringify(profileSaved);
 
-  const handleCompanyField = <K extends keyof MockCompany>(key: K, value: MockCompany[K]) => {
-    setCompany((prev) => ({ ...prev, [key]: value }));
+  // ── Branding form state ──
+  const [brandingSaved, setBrandingSaved] = useState<BrandingForm>(DEFAULT_BRANDING);
+  const [branding, setBranding] = useState<BrandingForm>(DEFAULT_BRANDING);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [savingBranding, setSavingBranding] = useState(false);
+  const brandingDirty = !!logoFile || JSON.stringify(branding) !== JSON.stringify(brandingSaved);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Notifications form state ──
+  const [prefsSaved, setPrefsSaved] = useState<CompanyNotificationPrefs>(DEFAULT_NOTIFICATIONS);
+  const [prefs, setPrefs] = useState<CompanyNotificationPrefs>(DEFAULT_NOTIFICATIONS);
+  const [savingPrefs, setSavingPrefs] = useState(false);
+  const prefsDirty = JSON.stringify(prefs) !== JSON.stringify(prefsSaved);
+
+  useEffect(() => {
+    if (!effectiveCompanyId) {
+      setIsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await getCompany(effectiveCompanyId);
+        if (cancelled) return;
+        setCompanyRecord(res.data);
+        const p = toProfileForm(res.data);
+        const b = toBrandingForm(res.data);
+        const n = toNotificationsForm(res.data);
+        setProfile(p);
+        setProfileSaved(p);
+        setBranding(b);
+        setBrandingSaved(b);
+        setPrefs(n);
+        setPrefsSaved(n);
+      } catch (err) {
+        if (!cancelled) toast.error(err instanceof ApiError ? err.message : "Couldn't load company settings.");
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [effectiveCompanyId]);
+
+  const handleProfileField = <K extends keyof ProfileForm>(key: K, value: ProfileForm[K]) => {
+    setProfile((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleSaveCompany = async () => {
+    if (!effectiveCompanyId) return;
     setSavingCompany(true);
-    await new Promise((r) => setTimeout(r, 400));
-    patchCompany(company);
-    setSavingCompany(false);
-    toast.success("Company profile updated");
+    try {
+      const res = await updateCompanyProfile(effectiveCompanyId, profile);
+      const p = toProfileForm(res.data);
+      setCompanyRecord(res.data);
+      setProfile(p);
+      setProfileSaved(p);
+      toast.success("Company profile updated");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't save the company profile.");
+    } finally {
+      setSavingCompany(false);
+    }
   };
 
-  const handleCancelCompany = () => {
-    setCompany({ ...companyStore });
+  const handleCancelCompany = () => setProfile(profileSaved);
+
+  const handleLogoPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLogoFile(file);
+    setLogoPreview(URL.createObjectURL(file));
   };
 
-  // ── Notifications form state ──
-  const [prefs, setPrefs] = useState<MockNotificationPrefs>({ ...notificationPrefsStore });
-  const [savingPrefs, setSavingPrefs] = useState(false);
-  const prefsDirty = JSON.stringify(prefs) !== JSON.stringify(notificationPrefsStore);
+  const handleSaveBranding = async () => {
+    if (!effectiveCompanyId) return;
+    setSavingBranding(true);
+    try {
+      let logoUrl = branding.logoUrl;
+      if (logoFile) {
+        const uploaded = await uploadCourseFile(logoFile, "company-logos");
+        logoUrl = uploaded.url;
+      }
+      const res = await updateCompanyBranding(effectiveCompanyId, {
+        logoUrl,
+        primaryColor: branding.primaryColor,
+        accentColor: branding.accentColor,
+      });
+      const b = toBrandingForm(res.data);
+      setCompanyRecord(res.data);
+      setBranding(b);
+      setBrandingSaved(b);
+      setLogoFile(null);
+      setLogoPreview(null);
+      toast.success("Branding updated");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't save branding.");
+    } finally {
+      setSavingBranding(false);
+    }
+  };
+
+  const handleCancelBranding = () => {
+    setBranding(brandingSaved);
+    setLogoFile(null);
+    setLogoPreview(null);
+  };
 
   const handleSavePrefs = async () => {
+    if (!effectiveCompanyId) return;
     setSavingPrefs(true);
-    await new Promise((r) => setTimeout(r, 400));
-    patchNotificationPrefs(prefs);
-    setSavingPrefs(false);
-    toast.success("Notification preferences saved");
+    try {
+      const changed: Partial<CompanyNotificationPrefs> = {};
+      (Object.keys(prefs) as (keyof CompanyNotificationPrefs)[]).forEach((key) => {
+        if (prefs[key] !== prefsSaved[key]) changed[key] = prefs[key];
+      });
+      const res = await updateCompanyNotifications(effectiveCompanyId, changed);
+      const n = toNotificationsForm(res.data);
+      setCompanyRecord(res.data);
+      setPrefs(n);
+      setPrefsSaved(n);
+      toast.success("Notification preferences saved");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't save notification preferences.");
+    } finally {
+      setSavingPrefs(false);
+    }
   };
 
-  const handleCancelPrefs = () => {
-    setPrefs({ ...notificationPrefsStore });
-  };
+  const handleCancelPrefs = () => setPrefs(prefsSaved);
 
   return (
     <LMSLayout
@@ -182,14 +336,14 @@ export default function LMSSettings() {
                       <div>
                         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Company Name</label>
                         <Input
-                          value={company.name}
-                          onChange={(e) => handleCompanyField("name", e.target.value)}
+                          value={profile.name}
+                          onChange={(e) => handleProfileField("name", e.target.value)}
                           className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
                         />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Industry</label>
-                        <Select value={company.industry} onValueChange={(v) => handleCompanyField("industry", v)}>
+                        <Select value={profile.industry} onValueChange={(v) => handleProfileField("industry", v)}>
                           <SelectTrigger className="w-full bg-white focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20">
                             <SelectValue />
                           </SelectTrigger>
@@ -203,8 +357,8 @@ export default function LMSSettings() {
                       <div>
                         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Primary Contact</label>
                         <Input
-                          value={company.contactName}
-                          onChange={(e) => handleCompanyField("contactName", e.target.value)}
+                          value={profile.contactName}
+                          onChange={(e) => handleProfileField("contactName", e.target.value)}
                           className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
                         />
                       </div>
@@ -212,16 +366,16 @@ export default function LMSSettings() {
                         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Contact Email</label>
                         <Input
                           type="email"
-                          value={company.contactEmail}
-                          onChange={(e) => handleCompanyField("contactEmail", e.target.value)}
+                          value={profile.contactEmail}
+                          onChange={(e) => handleProfileField("contactEmail", e.target.value)}
                           className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
                         />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Phone</label>
                         <Input
-                          value={company.contactPhone}
-                          onChange={(e) => handleCompanyField("contactPhone", e.target.value)}
+                          value={profile.contactPhone}
+                          onChange={(e) => handleProfileField("contactPhone", e.target.value)}
                           className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
                         />
                       </div>
@@ -229,14 +383,14 @@ export default function LMSSettings() {
                         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Location</label>
                         <div className="flex gap-2">
                           <Input
-                            value={company.city}
-                            onChange={(e) => handleCompanyField("city", e.target.value)}
+                            value={profile.city}
+                            onChange={(e) => handleProfileField("city", e.target.value)}
                             placeholder="City"
                             className="focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
                           />
                           <Input
-                            value={company.state}
-                            onChange={(e) => handleCompanyField("state", e.target.value)}
+                            value={profile.state}
+                            onChange={(e) => handleProfileField("state", e.target.value)}
                             placeholder="State"
                             className="w-20 focus-visible:border-[#1E90FF] focus-visible:ring-[#1E90FF]/20"
                           />
@@ -258,37 +412,85 @@ export default function LMSSettings() {
 
             {activeTab === "branding" && (
               <div className="bg-white rounded-xl border border-gray-100 p-6 space-y-5">
-                <h3 className="font-display font-bold text-[#0F1C2E] text-xl uppercase">Custom Branding</h3>
-                <div className="p-4 bg-[#F4F6F9] rounded-xl border border-gray-200">
-                  <div className="text-xs font-bold text-[#1E90FF] uppercase tracking-wide mb-1">Professional Plan Feature</div>
-                  <p className="text-sm text-gray-600">Custom branding lets you replace the Bastion LMS logo and colors with your company's brand for a white-label experience.</p>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Company Logo</label>
-                  <div className="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center">
-                    <div className="w-16 h-16 bg-[#0F1C2E] rounded-xl flex items-center justify-center mx-auto mb-3">
-                      <Shield className="w-8 h-8 text-white" />
+                <div className="flex items-center justify-between">
+                  <h3 className="font-display font-bold text-[#0F1C2E] text-xl uppercase">Custom Branding</h3>
+                  {brandingDirty && (
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={handleCancelBranding} disabled={savingBranding}>
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="bg-[#0047AB] hover:bg-[#003a8c]"
+                        onClick={handleSaveBranding}
+                        disabled={savingBranding}
+                      >
+                        {savingBranding ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save Changes"}
+                      </Button>
                     </div>
-                    <p className="text-sm text-gray-400">Using default Bastion LMS branding</p>
-                  </div>
+                  )}
                 </div>
-                <div className="grid sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Primary Color</label>
-                    <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2.5">
-                      <div className="w-6 h-6 rounded bg-[#0047AB]" />
-                      <span className="text-sm font-mono text-gray-700">#0047AB</span>
+
+                {isLoading ? (
+                  <Skeleton className="h-32 w-full rounded-xl" />
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Company Logo</label>
+                      <div className="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center">
+                        <div className="w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-3 overflow-hidden bg-[#0F1C2E]">
+                          {logoPreview || branding.logoUrl ? (
+                            <img src={logoPreview ?? branding.logoUrl} alt="Company logo" className="w-full h-full object-cover" />
+                          ) : (
+                            <Shield className="w-8 h-8 text-white" />
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-400 mb-3">
+                          {logoPreview || branding.logoUrl ? "Custom logo" : "Using default Bastion LMS branding"}
+                        </p>
+                        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoPick} />
+                        <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                          <Upload className="w-3.5 h-3.5 mr-1.5" /> Upload Logo
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Accent Color</label>
-                    <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2.5">
-                      <div className="w-6 h-6 rounded bg-[#0F1C2E]" />
-                      <span className="text-sm font-mono text-gray-700">#0F1C2E</span>
+                    <div className="grid sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Primary Color</label>
+                        <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2">
+                          <input
+                            type="color"
+                            value={branding.primaryColor}
+                            onChange={(e) => setBranding((prev) => ({ ...prev, primaryColor: e.target.value }))}
+                            className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0"
+                          />
+                          <Input
+                            value={branding.primaryColor}
+                            onChange={(e) => setBranding((prev) => ({ ...prev, primaryColor: e.target.value }))}
+                            className="border-0 shadow-none p-0 h-auto font-mono text-sm text-gray-700 focus-visible:ring-0"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Accent Color</label>
+                        <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2">
+                          <input
+                            type="color"
+                            value={branding.accentColor}
+                            onChange={(e) => setBranding((prev) => ({ ...prev, accentColor: e.target.value }))}
+                            className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0"
+                          />
+                          <Input
+                            value={branding.accentColor}
+                            onChange={(e) => setBranding((prev) => ({ ...prev, accentColor: e.target.value }))}
+                            className="border-0 shadow-none p-0 h-auto font-mono text-sm text-gray-700 focus-visible:ring-0"
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-                <p className="text-xs text-gray-400">White-label branding is available on the Professional and Enterprise plans. Contact your account manager to enable it.</p>
+                    <p className="text-xs text-gray-400">White-label branding replaces the Bastion LMS logo and colors across the LMS for your company's users.</p>
+                  </>
+                )}
               </div>
             )}
 
@@ -315,20 +517,28 @@ export default function LMSSettings() {
                     </div>
                   )}
                 </div>
-                <div className="space-y-3">
-                  {NOTIFICATION_ITEMS.map((n) => (
-                    <div key={n.key} className="flex items-center justify-between p-4 bg-[#F4F6F9] rounded-xl">
-                      <div>
-                        <div className="text-sm font-semibold text-gray-800">{n.label}</div>
-                        <div className="text-xs text-gray-400 mt-0.5">{n.desc}</div>
+                {isLoading ? (
+                  <div className="space-y-3">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <Skeleton key={i} className="h-16 w-full rounded-xl" />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {NOTIFICATION_ITEMS.map((n) => (
+                      <div key={n.key} className="flex items-center justify-between p-4 bg-[#F4F6F9] rounded-xl">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-800">{n.label}</div>
+                          <div className="text-xs text-gray-400 mt-0.5">{n.desc}</div>
+                        </div>
+                        <Switch
+                          checked={prefs[n.key]}
+                          onCheckedChange={(checked) => setPrefs((prev) => ({ ...prev, [n.key]: checked }))}
+                        />
                       </div>
-                      <Switch
-                        checked={prefs[n.key]}
-                        onCheckedChange={(checked) => setPrefs((prev) => ({ ...prev, [n.key]: checked }))}
-                      />
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
