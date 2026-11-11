@@ -233,7 +233,7 @@ function NotificationBell() {
         <button className="relative p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
           <Bell className="w-4 h-4" />
           {unreadCount > 0 && (
-            <span className="absolute top-1 right-1 min-w-[14px] h-[14px] px-0.5 flex items-center justify-center bg-[#0047AB] rounded-full ring-2 ring-[#0F1C2E] text-[9px] font-bold text-white leading-none">
+            <span className="absolute top-1 right-1 min-w-3.5 h-3.5 px-0.5 flex items-center justify-center bg-[#0047AB] rounded-full ring-2 ring-[#0F1C2E] text-[9px] font-bold text-white leading-none">
               {unreadCount > 9 ? "9+" : unreadCount}
             </span>
           )}
